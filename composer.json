@@ -1,0 +1,9 @@
+{
+    "name": "pikero/sistema",
+    "description": "Pikero - Software para ferreterías",
+    "require": {
+        "vlucas/phpdotenv": "^5.6",
+        "phpmailer/phpmailer": "^6.9",
+        "setasign/fpdf": "^1.9"
+    }
+}
