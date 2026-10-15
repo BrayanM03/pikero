@@ -1,1 +1,61 @@
-const escapar=e=>String(e??"").replace(/[&<>"']/g,e=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[e]));export async function cargarCatalogoSAT(e,t=""){const a=await $.getJSON(`${BASE_URL}api/ventas.php?tipo=catalogo_sat`,{catalogo:e,keyword:t});if(!a.estatus)throw new Error(a.mensaje||"No se pudo consultar el catálogo SAT.");return a.data||[]}export function opcionesSAT(e,t="",a="Selecciona una opción"){const o=String(t??"");let n=`<option value="">${escapar(a)}</option>`;return o&&!e.some(e=>String(e.Value)===o)&&(n+=`<option value="${escapar(o)}" selected>${escapar(o)}</option>`),e.forEach(e=>{const t=String(e.Value??e.value??""),a=String(e.Name??e.name??"");t&&(n+=`<option value="${escapar(t)}" ${t===o?"selected":""}>${escapar(t)} · ${escapar(a)}</option>`)}),n}export function inicializarSelectpicker(e=document){$(e).find("select.selectpicker").each(function(){const e=$(this);e.selectpicker({liveSearch:!0,liveSearchNormalize:!0,noneSelectedText:"Selecciona una opción",noneResultsText:"Sin resultados para {0}"});const t=e.data("catalogo-sat");if(!t)return;let a;e.on("shown.bs.select",()=>{const o=e.parent().find(".bs-searchbox input");o.off("input.catalogoSat").on("input.catalogoSat",function(){const n=this.value.trim();clearTimeout(a),n.length<2||(a=setTimeout(async()=>{try{const a=await cargarCatalogoSAT(t,n),c=e.val();e.empty().append(opcionesSAT(a,c)),c&&e.val(c),e.selectpicker("refresh"),o.val(n)}catch(e){console.error(e)}},300))})})})}
+const escapar = (valor) => String(valor ?? '').replace(/[&<>"']/g, (caracter) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+}[caracter]));
+
+export async function cargarCatalogoSAT(catalogo, keyword = '') {
+  const respuesta = await $.getJSON(`${BASE_URL}api/ventas.php?tipo=catalogo_sat`, { catalogo, keyword });
+  if (!respuesta.estatus) throw new Error(respuesta.mensaje || 'No se pudo consultar el catálogo SAT.');
+  return respuesta.data || [];
+}
+
+export function opcionesSAT(opciones, seleccionado = '', placeholder = 'Selecciona una opción') {
+  const valorSeleccionado = String(seleccionado ?? '');
+  let html = `<option value="">${escapar(placeholder)}</option>`;
+  if (valorSeleccionado && !opciones.some((opcion) => String(opcion.Value) === valorSeleccionado)) {
+    html += `<option value="${escapar(valorSeleccionado)}" selected>${escapar(valorSeleccionado)}</option>`;
+  }
+  opciones.forEach((opcion) => {
+    const value = String(opcion.Value ?? opcion.value ?? '');
+    const name = String(opcion.Name ?? opcion.name ?? '');
+    if (!value) return;
+    html += `<option value="${escapar(value)}" ${value === valorSeleccionado ? 'selected' : ''}>${escapar(value)} · ${escapar(name)}</option>`;
+  });
+  return html;
+}
+
+export function inicializarSelectpicker(contenedor = document) {
+  $(contenedor).find('select.selectpicker').each(function () {
+    const $select = $(this);
+    $select.selectpicker({
+      liveSearch: true,
+      liveSearchNormalize: true,
+      noneSelectedText: 'Selecciona una opción',
+      noneResultsText: 'Sin resultados para {0}'
+    });
+
+    const catalogo = $select.data('catalogo-sat');
+    if (!catalogo) return;
+
+    let temporizador;
+    $select.on('shown.bs.select', () => {
+      const $busqueda = $select.parent().find('.bs-searchbox input');
+      $busqueda.off('input.catalogoSat').on('input.catalogoSat', function () {
+        const keyword = this.value.trim();
+        clearTimeout(temporizador);
+        if (keyword.length < 2) return;
+        temporizador = setTimeout(async () => {
+          try {
+            const opciones = await cargarCatalogoSAT(catalogo, keyword);
+            const seleccionado = $select.val();
+            $select.empty().append(opcionesSAT(opciones, seleccionado));
+            if (seleccionado) $select.val(seleccionado);
+            $select.selectpicker('refresh');
+            $busqueda.val(keyword);
+          } catch (error) {
+            console.error(error);
+          }
+        }, 300);
+      });
+    });
+  });
+}

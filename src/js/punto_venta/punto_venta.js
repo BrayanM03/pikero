@@ -376,16 +376,20 @@ function procesarCobro() {
           if (result.isDenied) {
             abrirFormularioFactura(resp.id_venta);
           } else if (result.isConfirmed) {
+
+            if(resp.tipo_reporte === 1) {
             const printContent = document.getElementById('ticket-impresion').innerHTML;
             const printWindow = window.open('', '', 'width=400,height=600');
             printWindow.document.write(`<html><head><title>Ticket ${resp.folio}</title><style>body{font-family:monospace;padding:10px;}</style></head><body>${printContent}</body></html>`);
             printWindow.document.close();
-           
             setTimeout(() => {
             printWindow.focus(); 
             printWindow.print();
             printWindow.close();
           }, 250);
+            }else if(resp.tipo_reporte === 2) {
+                window.open(BASE_URL + 'api/ventas.php?tipo=pdf&id=' + resp.id_venta, '_blank');
+            }
           }
 
           // Reset carrito

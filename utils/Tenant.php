@@ -12,6 +12,10 @@ class Tenant {
         return $_SESSION['id_sucursal'] ?? null;
     }
 
+    public static function tipoReporte() {
+        return $_SESSION['tipo_reporte'] ?? null;
+    }
+
     public static function exigirFerreteria() {
         $id = self::idFerreteria();
         if (!$id) {

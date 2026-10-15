@@ -37,6 +37,7 @@ class AuthController {
         $_SESSION['foto_perfil'] = $usuario['foto_perfil'] ?? '';
         $_SESSION['logo_sucursal'] = $usuario['logo_sucursal'] ?? '';
         $_SESSION['logo_ferreteria'] = $usuario['logo_ferreteria'] ?? '';
+        $_SESSION['tipo_reporte'] = $usuario['tipo_reporte'] ?? null;
 
         return [
             "estado" => 1,

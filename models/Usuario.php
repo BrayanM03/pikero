@@ -119,7 +119,8 @@ class Usuario extends Datatable {
         $stmt = $this->db->query(
             "SELECT u.*, r.nombre as nombre_rol, r.slug as slug_rol,
                     s.nombre as sucursal, s.logo as logo_sucursal,
-                    f.nombre as ferreteria, f.logo as logo_ferreteria
+                    f.nombre as ferreteria, f.logo as logo_ferreteria,
+                    f.tipo_reporte
              FROM usuarios u
              INNER JOIN roles r ON u.id_rol = r.id
              INNER JOIN sucursales s ON s.id = u.id_sucursal

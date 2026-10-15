@@ -8,12 +8,14 @@ class PuntoVenta {
     private Date $fecha;
     private ?int $id_ferreteria;
     private ?int $id_sucursal;
+    private ?int $tipo_reporte;
 
     public function __construct(?int $id_ferreteria = null, ?int $id_sucursal = null) {
         $this->db = new Database();
         $this->fecha = new Date();
         $this->id_ferreteria = $id_ferreteria ?? Tenant::idFerreteria();
         $this->id_sucursal = $id_sucursal ?? (Tenant::idSucursal() ?? 1);
+        $this->tipo_reporte = Tenant::tipoReporte();
     }
 
     public function procesarVenta(array $datosVenta): array {
@@ -249,7 +251,8 @@ class PuntoVenta {
                 'tipo_venta' => $tipo_venta,
                 'abono_inicial' => $abono_inicial,
                 'saldo' => $total - $abono_inicial,
-                'items' => $itemsValidados
+                'items' => $itemsValidados,
+                'tipo_reporte' => $this->tipo_reporte
             ];
         } catch (Throwable $e) {
             $this->db->rollBack();
