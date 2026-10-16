@@ -6,7 +6,10 @@ require_once 'config/config.php';
 
 $controller_permiso = new PermisoController();
 
-$url = isset($_GET['url']) ? $_GET['url'] : 'panel';
+/* $url = isset($_GET['url']) ? $_GET['url'] : 'panel';
+$datos = explode('/', $url); */
+$url = trim($_GET['url'] ?? 'panel', '/');
+
 $datos = explode('/', $url);
 
 $modulo = $datos[0];
