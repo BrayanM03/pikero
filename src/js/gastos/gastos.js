@@ -67,7 +67,7 @@ async function abrirFormulario(gasto = null) {
   const localToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
   const receiptMarkup = gasto?.comprobante_url
     ? `<div class="mb-3"><span class="form-label d-block">Comprobante actual</span><a class="btn btn-sm btn-outline-secondary" href="${escapeHtml(gasto.comprobante_url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-paperclip me-1"></i>Ver comprobante</a><small class="form-text d-block">Selecciona un archivo nuevo solo si deseas reemplazarlo.</small></div>`
-    : '';
+    : ''; 
   const result = await Swal.fire({
     title: editing ? 'Actualizar gasto' : 'Registrar gasto',
     width: '760px',

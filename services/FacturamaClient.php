@@ -60,7 +60,7 @@ class FacturamaClient
             return ['estatus' => false, 'mensaje' => 'No se pudo consultar el catálogo SAT. Inténtalo de nuevo.', 'response' => $response, 'query' => $query];
         }
         if (array_key_exists('estatus', $response['body']) && !$response['body']['estatus']) {
-            return ['estatus' => false, 'mensaje' => 'No se pudo consultar el catálogo SAT. Inténtalo de nuevo.'];
+            return ['estatus' => false, 'mensaje' => 'No se pudo consultar el catálogo SAT. Inténtalo de nuevo.', 'response' => $response, 'query' => $query];
         }
 
         $data = $response['body']['data'] ?? $response['body'];

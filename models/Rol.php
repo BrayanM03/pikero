@@ -19,7 +19,7 @@ class Rol extends Datatable {
             $orderColumn,
             $orderDir,
             ['nombre'],
-            "slug <> 'superadmin'",
+            '',//  "slug <> 'superadmin'",
             []
         );
     }
@@ -44,7 +44,7 @@ class Rol extends Datatable {
     }
 
     public function obtenerRoles($sql_where = '', $params = []) {
-        $stmt = $this->db->query("SELECT * FROM roles WHERE estatus = 1 AND slug <> 'superadmin'" . $sql_where . ' ORDER BY id ASC', $params);
+        $stmt = $this->db->query("SELECT * FROM roles WHERE estatus = 1 " . $sql_where . ' ORDER BY id ASC', $params);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }
