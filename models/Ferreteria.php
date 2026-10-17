@@ -130,10 +130,10 @@ class Ferreteria {
              * 3. Construimos la ruta
              */
               $timestamp = time();
-            $ruta =
-                'ferreterias/' .
+            $ruta = 
+                'tenants/' .
                 $_SESSION['id_ferreteria'] .
-                '/logos/' . $timestamp . '.webp';
+                '/img/' . $timestamp . '.webp';
 
             /*
              * 4. Subimos a Supabase

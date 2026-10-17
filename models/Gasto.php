@@ -243,7 +243,7 @@ class Gasto {
         $extensions = ['application/pdf' => 'pdf', 'image/jpeg' => 'jpg', 'image/png' => 'png', 'image/webp' => 'webp'];
         if (!isset($extensions[$mime])) return ['estatus' => false, 'mensaje' => 'El comprobante debe ser PDF, JPG, PNG o WEBP'];
         $filename = bin2hex(random_bytes(16)) . '.' . $extensions[$mime];
-        $path = (int)$this->ferreteria . '/gastos/' . $filename;
+        $path = 'tenants/' . (int)$this->ferreteria . '/gastos/' . $filename;
         try {
             $this->storage->subirArchivo($file['tmp_name'], $path, $mime);
             return ['estatus' => true, 'ruta' => $path];
