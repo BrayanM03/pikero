@@ -68,7 +68,7 @@ class FacturamaClient
             return ['estatus' => false, 'mensaje' => 'La respuesta del catálogo SAT no es válida.'];
         }
 
-        return ['estatus' => true, 'data' => array_values($data)];
+        return ['estatus' => true, 'data' => array_values($data), 'response' => $response, 'query' => $query];
     }
 
     public static function seleccionarEmisor(array $issuers, ?int $issuerId): array
@@ -242,7 +242,8 @@ class FacturamaClient
         return [
             'ok' => $status >= 200 && $status < 300 && is_array($decoded),
             'status' => $status,                                             // <- nuevo
-            'body' => is_array($decoded) ? $decoded : []
+            'body' => is_array($decoded) ? $decoded : [],
+            'result' => $result ?? $rawBody
         ];
     }
 
