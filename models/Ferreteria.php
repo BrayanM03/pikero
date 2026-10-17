@@ -103,15 +103,15 @@ class Ferreteria {
                 ? ['estatus' => true, 'mensaje' => 'Ferretería registrada y ' . $mensaje, 'nuevo' => $newId]
                 : ['estatus' => false, 'mensaje' => 'No se pudo registrar la ferretería'];
         }
-
-        $updated = $this->db->update('ferreterias', $values, 'id = ?', [$id]);
+      
         if ($logo !== null && !empty($logo['tmp_name'])) {
             $logoPath = $this->guardarLogo($logo, $id);
             if ($logoPath === null) {
                 return ['estatus' => false, 'mensaje' => 'El logo debe ser una imagen PNG, JPG o WEBP de hasta 3 MB'];
-            }
-            $values['logo'] = $logoPath;
-        }
+                }
+                $values['logo'] = $logoPath;
+                }
+        $updated = $this->db->update('ferreterias', $values, 'id = ?', [$id]);
         return $updated >= 0
             ? ['estatus' => true, 'mensaje' => 'Ferretería actualizada']
             : ['estatus' => false, 'mensaje' => 'No se pudo actualizar la ferretería'];
