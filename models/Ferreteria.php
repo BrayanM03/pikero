@@ -81,24 +81,37 @@ class Ferreteria {
             'tipo_reporte' => (int)($data['tipo_reporte'] ?? 1)
         ]; 
 
+        if ($id === null) {
+            $values['estatus'] = 1;
+            $values['fecha_registro'] = $this->fecha->obtenerFechaRegistro();
+            $newId = $this->db->insert('ferreterias', $values);
+            if ($logo !== null && !empty($logo['tmp_name']) && $newId !== false) {
+            $logoPath = $this->guardarLogo($logo, $newId);
+            if ($logoPath === null) {
+               $mensaje = 'El logo debe ser una imagen PNG, JPG o WEBP de hasta 3 MB';
+            }else{
+                 $mensaje = 'Logo registrado correctamente';
+                 $values_updated = [];
+                 $values_updated['logo'] = $logoPath;
+                  $this->db->update('ferreterias', $values_updated, 'id = ?', [$newId]);
+            }
+
+            }else {
+                $mensaje ='';
+            }
+            return $newId
+                ? ['estatus' => true, 'mensaje' => 'Ferretería registrada y ' . $mensaje, 'nuevo' => $newId]
+                : ['estatus' => false, 'mensaje' => 'No se pudo registrar la ferretería'];
+        }
+
+        $updated = $this->db->update('ferreterias', $values, 'id = ?', [$id]);
         if ($logo !== null && !empty($logo['tmp_name'])) {
-            $logoPath = $this->guardarLogo($logo);
+            $logoPath = $this->guardarLogo($logo, $id);
             if ($logoPath === null) {
                 return ['estatus' => false, 'mensaje' => 'El logo debe ser una imagen PNG, JPG o WEBP de hasta 3 MB'];
             }
             $values['logo'] = $logoPath;
         }
-
-        if ($id === null) {
-            $values['estatus'] = 1;
-            $values['fecha_registro'] = $this->fecha->obtenerFechaRegistro();
-            $newId = $this->db->insert('ferreterias', $values);
-            return $newId
-                ? ['estatus' => true, 'mensaje' => 'Ferretería registrada', 'nuevo' => $newId]
-                : ['estatus' => false, 'mensaje' => 'No se pudo registrar la ferretería'];
-        }
-
-        $updated = $this->db->update('ferreterias', $values, 'id = ?', [$id]);
         return $updated >= 0
             ? ['estatus' => true, 'mensaje' => 'Ferretería actualizada']
             : ['estatus' => false, 'mensaje' => 'No se pudo actualizar la ferretería'];
@@ -111,7 +124,7 @@ class Ferreteria {
             : ['estatus' => false, 'mensaje' => 'No se pudo cancelar la ferretería'];
     }
 
-    private function guardarLogo(array $file): ?string {
+    private function guardarLogo(array $file, int $id): ?string {
         if (($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || (int)($file['size'] ?? 0) > 3 * 1024 * 1024) {
             return null;
         }
@@ -132,7 +145,7 @@ class Ferreteria {
               $timestamp = time();
             $ruta = 
                 'tenants/' .
-                $_SESSION['id_ferreteria'] .
+                $id .
                 '/img/' . $timestamp . '.webp';
 
             /*
