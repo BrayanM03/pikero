@@ -3,6 +3,12 @@ import Toast from '../utils/toast.js';
 
 let tabla; 
 
+function escaparHtmlInventario(valor) {
+  return String(valor ?? '').replace(/[&<>"']/g, (caracter) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;'
+  }[caracter]));
+}
+
 function modalAjuste(id_producto, nombreProducto, existenciaActual) {
   Swal.fire({
     title: 'Ajuste de Stock: ' + nombreProducto,
@@ -121,28 +127,123 @@ let categoriasList = [];
 let marcasList = [];
 let unidadesList = [];
 
-function cargarCatalogosInventario() {
-  $.get(BASE_URL + 'api/catalogos.php?tipo=combo&catalogo=categorias', (r) => {
-    if (r.estatus) categoriasList = r.data;
-  }, 'json');
-
-  $.get(BASE_URL + 'api/catalogos.php?tipo=combo&catalogo=marcas', (r) => {
-    if (r.estatus) marcasList = r.data;
-  }, 'json');
-
-  $.get(BASE_URL + 'api/catalogos.php?tipo=combo&catalogo=unidades', (r) => {
-    if (r.estatus) unidadesList = r.data;
-  }, 'json');
+async function cargarCatalogosInventario() {
+  const [categorias, marcas, unidades] = await Promise.all([
+    $.getJSON(BASE_URL + 'api/catalogos.php?tipo=combo&catalogo=categorias'),
+    $.getJSON(BASE_URL + 'api/catalogos.php?tipo=combo&catalogo=marcas'),
+    $.getJSON(BASE_URL + 'api/catalogos.php?tipo=combo&catalogo=unidades')
+  ]);
+  if (categorias.estatus) categoriasList = categorias.data;
+  if (marcas.estatus) marcasList = marcas.data;
+  if (unidades.estatus) unidadesList = unidades.data;
 }
 
 function generarOpcionesInventario(lista, seleccionado) {
   let opts = '<option value="">-- Seleccionar --</option>';
   lista.forEach((item) => {
-    const sel = (item.id == seleccionado) ? 'selected' : '';
-    opts += `<option value="${item.id}" ${sel}>${item.nombre} ${item.abreviatura ? '(' + item.abreviatura + ')' : ''}</option>`;
+    const sel = String(item.id) === String(seleccionado) ? 'selected' : '';
+    const abreviatura = item.abreviatura ? ` (${escaparHtmlInventario(item.abreviatura)})` : '';
+    opts += `<option value="${escaparHtmlInventario(item.id)}" ${sel}>${escaparHtmlInventario(item.nombre)}${abreviatura}</option>`;
   });
   return opts;
 }
+
+function modalEditarProductoInventario(producto) {
+  Swal.fire({
+    title: 'Editar producto',
+    width: '700px',
+    html: `
+      <div class="text-start">
+        <div class="row">
+          <div class="col-md-5 mb-3">
+            <label class="form-label" for="inv_editar_codigo">Código / SKU</label>
+            <input id="inv_editar_codigo" class="form-control" value="${escaparHtmlInventario(producto.codigo || '')}">
+          </div>
+          <div class="col-md-7 mb-3">
+            <label class="form-label" for="inv_editar_nombre">Nombre del producto *</label>
+            <input id="inv_editar_nombre" class="form-control" value="${escaparHtmlInventario(producto.nombre || '')}" required>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-md-4 mb-3">
+            <label class="form-label" for="inv_editar_categoria">Categoría</label>
+            <select id="inv_editar_categoria" class="form-select">${generarOpcionesInventario(categoriasList, producto.id_categoria)}</select>
+          </div>
+          <div class="col-md-4 mb-3">
+            <label class="form-label" for="inv_editar_marca">Marca</label>
+            <select id="inv_editar_marca" class="form-select">${generarOpcionesInventario(marcasList, producto.id_marca)}</select>
+          </div>
+          <div class="col-md-4 mb-3">
+            <label class="form-label" for="inv_editar_unidad">Unidad</label>
+            <select id="inv_editar_unidad" class="form-select">${generarOpcionesInventario(unidadesList, producto.id_unidad)}</select>
+          </div>
+        </div>
+        <div class="row">
+          <div class="col-md-6 mb-3">
+            <label class="form-label" for="inv_editar_compra">Precio de compra (costo) *</label>
+            <input id="inv_editar_compra" type="number" min="0" step="0.01" class="form-control" value="${escaparHtmlInventario(producto.precio_compra ?? 0)}" required>
+          </div>
+          <div class="col-md-6 mb-3">
+            <label class="form-label" for="inv_editar_venta">Precio de venta *</label>
+            <input id="inv_editar_venta" type="number" min="0" step="0.01" class="form-control" value="${escaparHtmlInventario(producto.precio_venta ?? 0)}" required>
+          </div>
+        </div>
+      </div>`,
+    showCancelButton: true,
+    confirmButtonText: 'Guardar cambios',
+    cancelButtonText: 'Cancelar',
+    preConfirm: () => {
+      const nombre = document.getElementById('inv_editar_nombre').value.trim();
+      const precioCompra = Number(document.getElementById('inv_editar_compra').value);
+      const precioVenta = Number(document.getElementById('inv_editar_venta').value);
+      if (!nombre) {
+        Swal.showValidationMessage('El nombre del producto es obligatorio');
+        return false;
+      }
+      if (!Number.isFinite(precioCompra) || precioCompra < 0 || !Number.isFinite(precioVenta) || precioVenta < 0) {
+        Swal.showValidationMessage('Los precios deben ser números válidos mayores o iguales a 0');
+        return false;
+      }
+      return {
+        id: producto.id,
+        codigo: document.getElementById('inv_editar_codigo').value.trim(),
+        nombre,
+        id_categoria: document.getElementById('inv_editar_categoria').value || '',
+        id_marca: document.getElementById('inv_editar_marca').value || '',
+        id_unidad: document.getElementById('inv_editar_unidad').value || '',
+        precio_compra: precioCompra,
+        precio_venta: precioVenta,
+        clave_sat: producto.clave_sat || '01010101',
+        codigo_unidad_sat: producto.codigo_unidad_sat || 'H87',
+        objeto_impuesto: producto.objeto_impuesto || '02'
+      };
+    }
+  }).then((resultado) => {
+    if (!resultado.isConfirmed) return;
+    $.post(BASE_URL + 'api/productos.php?tipo=actualizar', resultado.value, function (respuesta) {
+      Toast.fire({ icon: respuesta.estatus ? 'success' : 'error', title: respuesta.mensaje });
+      if (respuesta.estatus && tabla) tabla.ajax.reload(false);
+    }, 'json').fail(() => {
+      Toast.fire({ icon: 'error', title: 'No se pudo actualizar el producto' });
+    });
+  });
+}
+
+window.editarProductoDesdeInventario = async (id) => {
+  try {
+    const [respuesta] = await Promise.all([
+      $.post(BASE_URL + 'api/productos.php?tipo=obtener', { id }, null, 'json'),
+      cargarCatalogosInventario()
+    ]);
+    if (!respuesta.estatus) {
+      Toast.fire({ icon: 'error', title: respuesta.mensaje });
+      return;
+    }
+    modalEditarProductoInventario(respuesta.data);
+  } catch (error) {
+    Toast.fire({ icon: 'error', title: 'No se pudo cargar el producto o sus catálogos' });
+  }
+};
 
 function modalNuevoProductoInventario() {
   Swal.fire({
@@ -245,13 +346,22 @@ function modalNuevoProductoInventario() {
   });
 }
 
-window.agregarProductoDesdeInventario = () => modalNuevoProductoInventario();
+window.agregarProductoDesdeInventario = async () => {
+  try {
+    await cargarCatalogosInventario();
+    modalNuevoProductoInventario();
+  } catch (error) {
+    Toast.fire({ icon: 'error', title: 'No se pudieron cargar los catálogos' });
+  }
+};
 
 $(document).ready(function () {
   const columns = [
     { data: 'id_producto', title: '#' },
     { data: 'codigo', title: 'Código / SKU', render: (d) => d ? `<code>${d}</code>` : '<span class="text-muted">S/C</span>' },
     { data: 'producto', title: 'Producto' },
+    { data: 'precio_compra', title: 'Costo' },
+    { data: 'precio_venta', title: 'Precio venta' },
     { data: 'categoria', title: 'Categoría', render: (d) => d || '<span class="text-muted">-</span>' },
     { data: 'marca', title: 'Marca', render: (d) => d || '<span class="text-muted">-</span>' },
     {
@@ -271,6 +381,9 @@ $(document).ready(function () {
       data: null,
       title: 'Acciones',
       render: (data, type, row) => `
+        <button class="btn btn-outline-primary btn-sm" onclick="editarProductoDesdeInventario(${row.id_producto})" title="Editar producto">
+          <i class="fa-solid fa-pen-to-square"></i>
+        </button>
         <button class="btn btn-primary btn-sm" onclick="ajustarStock(${row.id_producto}, '${encodeURIComponent(row.producto)}', ${row.existencia})" title="Ajustar Stock">
           <i class="fa-solid fa-boxes-stacked me-1"></i> Ajustar
         </button>
@@ -292,5 +405,5 @@ $(document).ready(function () {
       { name: 'stock', label: 'Disponibilidad', type: 'select', options: [{ value: 'agotado', label: 'Agotado' }, { value: 'bajo', label: 'Stock bajo' }, { value: 'disponible', label: 'Disponible' }] }
     ]
   });
-  cargarCatalogosInventario();
+  cargarCatalogosInventario().catch((error) => console.error('No se pudieron cargar catálogos de inventario:', error));
 });

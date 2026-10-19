@@ -23,6 +23,15 @@ async function cargarCatalogos() {
   }
 }
 
+function cargarOpciones(select, opciones, claveValor, claveEtiqueta, valorSeleccionado = '') {
+  select.replaceChildren(new Option('', ''));
+  opciones.forEach((opcion) => {
+    select.add(new Option(opcion[claveEtiqueta] ?? '', opcion[claveValor] ?? ''));
+  });
+  select.value = String(valorSeleccionado ?? '');
+  $(select).selectpicker('refresh');
+}
+
 async function gestionarCategorias() {
   const result = await Swal.fire({
     title: 'Agregar categoría de gasto',
@@ -93,7 +102,7 @@ async function abrirFormulario(gasto = null) {
       const category = document.getElementById('gasto-categoria');
       $(branch).selectpicker({ liveSearch: true, noneSelectedText: 'Selecciona una sucursal' });
       $(category).selectpicker({ liveSearch: true, noneSelectedText: 'Selecciona una categoría' });
-      cargarOpciones(branch, sucursales, 'id', 'nombre', gasto?.id_sucursal || '');
+      cargarOpciones(branch, sucursales, 'id', 'nombre', gasto?.id_sucursal || ''); 
       cargarOpciones(category, categorias, 'id', 'nombre', gasto?.id_categoria || '');
     },
     preConfirm: () => {

@@ -153,9 +153,27 @@ class Producto extends Datatable {
     }
 
     public function actualizar(int $id, array $data): array {
+        if ($id <= 0) {
+            return ['estatus' => false, 'mensaje' => 'Producto no encontrado'];
+        }
+
+        $producto = $this->db->select(
+            "SELECT id FROM {$this->tabla} WHERE id = ? AND id_ferreteria = ?",
+            [$id, $this->id_ferreteria]
+        );
+        if (empty($producto)) {
+            return ['estatus' => false, 'mensaje' => 'Producto no encontrado'];
+        }
+
         $nombre = trim($data['nombre'] ?? '');
         if (empty($nombre)) {
             return ['estatus' => false, 'mensaje' => 'El nombre es obligatorio'];
+        }
+
+        foreach (['precio_compra', 'precio_venta'] as $campoPrecio) {
+            if (isset($data[$campoPrecio]) && (!is_numeric($data[$campoPrecio]) || (float)$data[$campoPrecio] < 0)) {
+                return ['estatus' => false, 'mensaje' => 'Los precios deben ser números válidos mayores o iguales a 0'];
+            }
         }
 
         $codigo = trim($data['codigo'] ?? '');
