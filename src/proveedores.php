@@ -12,7 +12,7 @@ include "vistas/general/header.php";
                     <div class="row mb-2">
                         <div class="col-md-8">
                             <h1 class="h3 mb-3">Directorio de Proveedores</h1>
-                            <p class="text-muted mb-0">Gestión de distribuidores, fabricantes y compras de la ferretería.</p>
+                            <p class="text-muted mb-0">Gestión de distribuidores, fabricantes y compras del negocio.</p>
                         </div>
                         <div class="col-md-4 text-end">
                             <button class="btn btn-success" onclick="agregarProveedor()">

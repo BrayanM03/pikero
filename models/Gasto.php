@@ -210,8 +210,8 @@ class Gasto {
 
         $branch = $this->db->select('SELECT id FROM sucursales WHERE id = ? AND id_ferreteria = ? AND estatus = 1', [$sucursal, $this->ferreteria]);
         $categoryRow = $this->db->select('SELECT id FROM categorias_gastos WHERE id = ? AND id_ferreteria = ? AND estatus = 1', [$categoria, $this->ferreteria]);
-        if (!$branch) return ['estatus' => false, 'mensaje' => 'La sucursal no pertenece a esta ferretería o está inactiva'];
-        if (!$categoryRow) return ['estatus' => false, 'mensaje' => 'La categoría no pertenece a esta ferretería o está inactiva'];
+        if (!$branch) return ['estatus' => false, 'mensaje' => 'La sucursal no pertenece a este negocio o está inactiva'];
+        if (!$categoryRow) return ['estatus' => false, 'mensaje' => 'La categoría no pertenece a este negocio o está inactiva'];
 
         return ['estatus' => true, 'id_sucursal' => $sucursal, 'id_categoria' => $categoria, 'monto' => $monto, 'fecha' => $fecha, 'folio' => $folio ?: null, 'descripcion' => $descripcion];
     }

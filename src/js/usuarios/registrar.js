@@ -53,7 +53,7 @@ if (selectorFerreteria) {
                 });
                 selectorSucursal.disabled = data.data.length === 0;
                 $(selectorSucursal).selectpicker('refresh');
-                if (data.data.length === 0) Toast.fire({ icon: 'info', title: 'Esta ferretería no tiene sucursales activas' });
+                if (data.data.length === 0) Toast.fire({ icon: 'info', title: 'Este negocio no tiene sucursales activas' });
             })
             .catch(error => {
                 console.error('Error:', error);

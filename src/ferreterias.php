@@ -21,7 +21,7 @@ include 'vistas/general/header.php';
                         </div>
                         <div class="col-md-4 text-end">
                             <?php if ($controller_permiso->validarAcceso(2, CPERMISO::CREAR_FERRETERIAS->value)['estatus']): ?>
-                            <button class="btn btn-success" onclick="agregarFerreteria()"><i class="fa-solid fa-plus me-1"></i>Agregar ferretería</button>
+                            <button class="btn btn-success" onclick="agregarFerreteria()"><i class="fa-solid fa-plus me-1"></i>Agregar negocio</button>
                             <?php endif; ?>
                         </div>
                     </div>

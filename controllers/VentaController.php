@@ -51,6 +51,12 @@ class VentaController extends DataTableController {
         }
     }
 
+    public function editar(int $tipo_resp, int $id_venta, array $payload) {
+        $resp = $this->model->editar($id_venta, $payload);
+        if ($tipo_resp === 1) echo json_encode($resp);
+        return $resp;
+    }
+
     public function facturar(int $tipo_resp, array $data) {
         $resp = $this->model->facturar((int)($data['id'] ?? 0), $data);
         if ($tipo_resp === 1) echo json_encode($resp);

@@ -47,7 +47,7 @@ if (isset($_SESSION['id'])) {
         <img src="<?php echo STATIC_URL; ?>img/titulo_logo.png" alt="Pikero Logo" class="img-fluid mb-4" width="220" />
         <div class="error-code">404</div>
         <h1 class="h4">La página que buscas no existe.</h1>
-        <p class="text-muted">El sistema de ferretería sigue bajo control.</p>
+        <p class="text-muted">El sistema sigue bajo control.</p>
         <a href="<?php echo BASE_URL . $url_destino; ?>" class="btn-pikero"><?php echo $texto_boton; ?></a>
     </div>
 </body>

@@ -1,4 +1,4 @@
-<?php
+<?php 
 $sucursales_p = $controller_permiso->validarAcceso(2, CPERMISO::VER_SUCURSALES->value);
 $permisos_p = $controller_permiso->validarAcceso(2, CPERMISO::VER_PANEL_PERMISOS->value);
 $usuarios_p = $controller_permiso->validarAcceso(2, CPERMISO::VER_USUARIOS->value);

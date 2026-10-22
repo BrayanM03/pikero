@@ -27,4 +27,10 @@ class Date {
 
         return $numDia . " de " . $nombreMes . " " . $anio;
     }
+
+     function esFechaValida(string $fecha): bool
+    {
+        $d = DateTime::createFromFormat('Y-m-d H:i', $fecha);
+        return $d && $d->format('Y-m-d H:i') === $fecha;
+    }
 }

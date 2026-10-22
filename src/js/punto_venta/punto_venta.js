@@ -276,7 +276,7 @@ function procesarCobro() {
   const clienteNombre = document.getElementById('pos-cliente').selectedOptions[0]?.text || 'Público en general';
   const formaPagoNombre = id_forma_pago ? (document.getElementById('pos-forma-pago').selectedOptions[0]?.text || 'Efectivo') : 'Pendiente de abono';
   const pagoCon = tipo_venta === 'credito' ? abono_inicial : (parseFloat(document.getElementById('pos-pago-con').value) || total);
-
+  const fecha_venta = document.getElementById('pos-fecha').value;
   if (tipo_venta === 'contado' && pagoCon < total) {
     Swal.fire({
       icon: 'warning',
@@ -318,6 +318,7 @@ function procesarCobro() {
       id_forma_pago,
       tipo_venta,
       abono_inicial,
+      fecha_venta,
       items: carrito
     };
 

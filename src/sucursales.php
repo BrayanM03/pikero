@@ -13,7 +13,7 @@ include "vistas/general/header.php";
                     <div class="row mb-2">
                         <div class="col-md-8">
                             <h1 class="h3 mb-3">Sucursales</h1>
-                            <p class="text-muted mb-0">Una ferretería puede tener una o varias sucursales. Los usuarios se ligan a una.</p>
+                            <p class="text-muted mb-0">Un negocio puede tener una o varias sucursales. Los usuarios se ligan a una.</p>
                         </div>
                         <div class="col-md-4 text-end">
                             <?php if ($crear_sucursal['estatus']): ?>

@@ -83,6 +83,11 @@ include "vistas/general/header.php";
                                         <select id="pos-forma-pago" class="form-select"></select>
                                     </div>
 
+                                    <div class="mb-3">
+                                        <label class="form-label fw-bold">Fecha</label>
+                                        <input type="text" id="pos-fecha" class="form-control" placeholder="Selecciona fecha y hora" style="background-color: #fff; cursor: pointer;" readonly>
+                                    </div>
+
                                     <div class="mb-3 d-none" id="bloque-abono-inicial">
                                         <label class="form-label fw-bold" for="pos-abono-inicial">Abono inicial</label>
                                         <input type="number" min="0" step="0.01" id="pos-abono-inicial" class="form-control" value="0">
@@ -128,5 +133,15 @@ include "vistas/general/header.php";
     </div>
     <?php include "vistas/general/scripts.php"; ?>
     <script src="<?php echo STATIC_URL; ?>js/punto_venta/punto_venta.js" type="module"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Inicializar Flatpickr en el campo de fecha
+            flatpickr("#pos-fecha", {
+                enableTime: true,
+                dateFormat: "Y-m-d H:i",
+                locale: "es"
+            });
+        });
+    </script>
 </body>
 </html>

@@ -27,6 +27,7 @@ class PuntoVenta {
         $id_cliente = !empty($datosVenta['id_cliente']) ? (int)$datosVenta['id_cliente'] : null;
         $id_forma_pago = !empty($datosVenta['id_forma_pago']) ? (int)$datosVenta['id_forma_pago'] : null;
         $tipo_venta = (string)($datosVenta['tipo_venta'] ?? 'contado');
+        $fecha_venta = !empty($datosVenta['fecha_venta']) ? (string)$datosVenta['fecha_venta'] : $this->fecha->obtenerFechaRegistro();
         if (!in_array($tipo_venta, ['contado', 'credito'], true)) {
             return ['estatus' => false, 'mensaje' => 'El tipo de venta seleccionado no es válido'];
         }
@@ -161,7 +162,7 @@ class PuntoVenta {
                 'tipo_venta' => $tipo_venta,
                 'id_forma_pago' => $id_forma_pago,
                 'estatus' => 1,
-                'fecha_registro' => $this->fecha->obtenerFechaRegistro()
+                'fecha_registro' => $fecha_venta
             ]);
 
             if (!$id_venta) {

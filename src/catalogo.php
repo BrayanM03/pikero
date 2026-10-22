@@ -31,7 +31,7 @@ include "vistas/general/header.php";
                     </div>
                     <div class="card">
                         <div class="card-header">
-                            <h5 class="card-title mb-0"><?php echo ucfirst($meta[2]); ?> de esta ferretería</h5>
+                            <h5 class="card-title mb-0"><?php echo ucfirst($meta[2]); ?> de este negocio</h5>
                         </div>
                         <div class="card-body">
                             <table id="tabla-catalogo" class="table table-hover nowrap" style="width:100%"></table>

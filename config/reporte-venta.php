@@ -19,7 +19,7 @@ class PDF_VentaReporte extends FPDF {
         $this->ferreteria = $data['venta'];
         $this->sucursal = $data;
 
-       // Depuración: muestra los datos de la ferretería
+       // Depuración: muestra los datos del negocio
     }
 
     function Header() {

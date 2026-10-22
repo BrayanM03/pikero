@@ -12,7 +12,7 @@ include "vistas/general/header.php";
                     <div class="row mb-2">
                         <div class="col-md-8">
                             <h1 class="h3 mb-3">Directorio de Clientes</h1>
-                            <p class="text-muted mb-0">Gestión de clientes y facturación de la ferretería.</p>
+                            <p class="text-muted mb-0">Gestión de clientes y facturación del negocio.</p>
                         </div>
                         <div class="col-md-4 text-end"> 
                             <?php 

@@ -14,7 +14,7 @@ include "vistas/general/header.php";
                     <div class="row">
                         <?php
                         $cards = [
-                            ['sucursales', 'building', 'Sucursales', 'Tiendas de la ferretería'],
+                            ['sucursales', 'building', 'Sucursales', 'Sucursales del negocio'],
                             ['categorias', 'grid', 'Categorías', 'Clasificación de productos'],
                             ['marcas', 'award', 'Marcas', 'Marcas que manejas'],
                             ['unidades', 'box', 'Unidades', 'Pieza, caja, metro, kg'],

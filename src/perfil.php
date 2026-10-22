@@ -108,7 +108,7 @@ include 'vistas/general/header.php';
                                     <form id="form-ferreteria-activa">
                                         <label class="form-label" for="perfil-ferreteria">Trabajando actualmente en</label>
                                         <select class="selectpicker w-100" id="perfil-ferreteria" name="id_ferreteria" data-live-search="true" required>
-                                            <option value="" disabled>Selecciona una ferretería...</option>
+                                            <option value="" disabled>Selecciona un negocio...</option>
                                             <?php foreach ($ferreterias as $ferreteria): ?>
                                                 <option value="<?= (int)$ferreteria['id'] ?>" <?= (int)$ferreteria['id'] === $ferreteria_activa ? 'selected' : '' ?>><?= htmlspecialchars($ferreteria['nombre'], ENT_QUOTES, 'UTF-8') ?></option>
                                             <?php endforeach; ?>

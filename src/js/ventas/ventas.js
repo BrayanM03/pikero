@@ -2,6 +2,7 @@ import { initReportTable } from '../utils/report-table.js';
 import Toast from '../utils/toast.js';
 import { abrirFormularioFactura } from '../utils/facturacion.js';
 import { abrirAccionesFactura } from '../utils/factura-actions.js';
+import { tienePermiso } from '../utils/permisos.js';
 
 let tabla;
 
@@ -246,8 +247,54 @@ function facturarVenta(id_venta) {
   }, 'json');
 }
 
+function editarVenta(id_venta) {
+  $.get(BASE_URL + 'api/ventas.php?tipo=detalle&id=' + id_venta, function (resp) {
+    if (!resp.estatus) {
+      Toast.fire({ icon: 'error', title: resp.mensaje });
+      return;
+    }
+    const venta = resp.data.venta;
+    Swal.fire({
+      title: 'Editar fecha de venta',
+      html: `<div class="text-start">
+        <label class="form-label">Fecha y hora de la venta</label>
+        <input id="venta-fecha" style="background-color: #f8f9fa;" type="text" class="form-control" value="${venta.fecha_registro.replace(' ', 'T')}">
+      </div>`,
+      showCancelButton: true,
+      confirmButtonText: 'Guardar cambios',
+      cancelButtonText: 'Cancelar',
+      preConfirm: () => {
+        const nuevaFecha = $('#venta-fecha').val();
+        if (!nuevaFecha) {
+          Swal.showValidationMessage('Debes ingresar una fecha válida');
+          return false;
+        }
+        return nuevaFecha;
+      },
+      didOpen: () => {
+
+         flatpickr("#venta-fecha", {
+                enableTime: true,
+                dateFormat: "Y-m-d H:i",
+                locale: "es"
+            });
+
+      }
+    }).then((result) => {
+      if (!result.isConfirmed) return;
+      const payload = { id: id_venta, nueva_fecha: result.value };
+      $.post(BASE_URL + 'api/ventas.php?tipo=editar_venta', payload, function (resp) {
+        Toast.fire({ icon: resp.estatus ? 'success' : 'error', title: resp.mensaje });
+        if (resp.estatus && tabla) tabla.ajax.reload(null, false);
+      }, 'json');
+    });
+  }, 'json');
+
+}
 window.verDetalleVenta = (id) => verDetalleVenta(id);
 window.cancelarVenta = (id, folio) => cancelarVenta(id, folio);
+window.facturarVenta = (id) => facturarVenta(id);
+window.editarVenta = (id) => editarVenta(id);
 window.facturarVenta = (id) => abrirFormularioFactura(id, () => tabla && tabla.ajax.reload(null, false));
 window.accionesFacturaVenta = (id) => {
   $.get(`${BASE_URL}api/ventas.php?tipo=detalle&id=${encodeURIComponent(id)}`, (response) => {
@@ -288,10 +335,18 @@ $(document).ready(function () {
           <i class="fa-solid fa-receipt me-1"></i> Detalle
         </button>
         ${row.estatus == 1 && row.estatus_factura !== 'Facturada' ? `<button class="btn btn-warning btn-sm" onclick="facturarVenta(${row.id})" title="Facturar recibo"><i class="fa-solid fa-file-invoice"></i></button>` : ''}
-        ${row.estatus == 1 ? `
+        ${
+          tienePermiso('cancelar_ventas') &&  row.estatus == 1 ? `
         <button class="btn btn-danger btn-sm" onclick="cancelarVenta(${row.id}, '${row.folio}')" title="Cancelar Venta">
           <i class="fa-solid fa-ban"></i>
-        </button>` : ''}`
+        </button>` : ''}
+        ${
+          tienePermiso('cambiar_fecha_ventas') && row.estatus == 1 ? `
+        <button class="btn btn-sm" style="background-color: coral; color: white;" onclick="editarVenta(${row.id})" title="Cambiar fecha de venta">
+          <i class="fa-solid fa-edit"></i>
+        </button>` : ''}
+        
+        `
     }
   ];
 

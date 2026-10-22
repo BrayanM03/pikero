@@ -1,1 +1,153 @@
-import{cargarCatalogoSAT,inicializarSelectpicker,opcionesSAT}from"./catalogos-sat.js";import{abrirAccionesFactura}from"./factura-actions.js";function mostrarCargando(a,e="Por favor espera..."){Swal.fire({title:a,text:e,allowOutsideClick:!1,allowEscapeKey:!1,showConfirmButton:!1,didOpen:()=>Swal.showLoading()})}export function abrirFormularioFactura(a,e=null){mostrarCargando("Cargando","Obteniendo datos..."),$.get(BASE_URL+"api/ventas.php?tipo=emisores",null,null,"json").done(t=>{const o=t.data||[];t.estatus&&0!==o.length?$.when($.get(BASE_URL+"api/clientes.php?tipo=combo",null,null,"json"),$.get(BASE_URL+`api/ventas.php?tipo=detalle&id=${encodeURIComponent(a)}`,null,null,"json")).done(async(t,l)=>{const s=t[0],i=l[0];if(!i.estatus)return void Swal.fire({icon:"error",title:"No se pudo cargar el detalle",text:i.mensaje||"Inténtalo de nuevo."});const r=s.data||[];let c,n,d,m;try{[c,n,d,m]=await Promise.all([cargarCatalogoSAT("FiscalRegimens"),cargarCatalogoSAT("CfdiUses"),cargarCatalogoSAT("PaymentForms"),cargarCatalogoSAT("PaymentMethods")])}catch(a){return void Swal.fire({icon:"error",title:"No se pudieron cargar los catálogos SAT",text:a.message})}const p=a=>String(a??"").replace(/[&<>"']/g,a=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[a])),u=r.map(a=>`<option value="${Number(a.id)}">${p(a.nombre)}${a.rfc?` (${p(a.rfc)})`:""}</option>`).join(""),f=i.data.items||[],v=1===o.length?Number(o[0].issuer_id):null,b=o.length>1?`<div class="mb-3"><label for="fac_emisor" class="form-label">Emisor *</label><select id="fac_emisor" class="form-select" required><option value="">Selecciona un emisor</option>${o.map(a=>`<option value="${Number(a.issuer_id)}">${p(a.name)}${a.rfc?` (${p(a.rfc)})`:""}</option>`).join("")}</select></div>`:`<p class="mb-3">Emisor: <strong>${p(o[0].name)}${o[0].rfc?` (${p(o[0].rfc)})`:""}</strong></p>`,g=f.map(a=>`<tr>\n        <td>${p(a.producto)}<br><small class="text-muted">${p(a.codigo||"S/C")}</small></td>\n        <td class="text-end">${Number(a.cantidad).toFixed(3)}</td>\n        <td class="text-end">$${Number(a.precio).toFixed(2)}</td>\n        <td class="text-end">$${Number(a.importe).toFixed(2)}</td>\n      </tr>`).join("");Swal.fire({title:`Facturar recibo ${p(i.data.venta.folio)}`,width:"900px",html:`<div class="text-start">\n          ${b}\n          <label class="form-label">Cliente del catálogo</label>\n          <select id="fac_cliente" class="selectpicker w-100 mb-3" data-live-search="true"><option value="">Captura datos fiscales manualmente</option>${u}</select>\n          <div class="row">\n            <div class="col-md-6 mb-3"><label class="form-label">RFC *</label><input id="fac_rfc" class="form-control" placeholder="XAXX010101000"></div>\n            <div class="col-md-6 mb-3"><label class="form-label">Razón social *</label><input id="fac_razon" class="form-control"></div>\n          </div>\n          <div class="row">\n            <div class="col-md-3 mb-3"><label class="form-label">Código postal *</label><select id="fac_cp" class="selectpicker w-100" data-catalogo-sat="PostalCodes" data-live-search="true">${opcionesSAT([])}</select></div>\n            <div class="col-md-3 mb-3"><label class="form-label">Régimen fiscal *</label><select id="fac_regimen" class="selectpicker w-100" data-live-search="true">${opcionesSAT(c)}</select></div>\n            <div class="col-md-3 mb-3"><label class="form-label">Uso CFDI *</label><select id="fac_uso" class="selectpicker w-100" data-live-search="true">${opcionesSAT(n)}</select></div>\n            <div class="col-md-3 mb-3"><label class="form-label">Tasa IVA</label><select id="fac_iva" class="form-select"><option value="0">0%</option><option value="0.08">8%</option><option value="0.16" selected>16%</option></select></div>\n          </div>\n          <div class="row">\n            <div class="col-md-6 mb-3"><label class="form-label">Correo (opcional)</label><input id="fac_correo" type="email" class="form-control"></div>\n            <div class="col-md-3 mb-3"><label class="form-label">Método de pago *</label><select id="fac_metodo" class="selectpicker w-100" data-live-search="true">${opcionesSAT(m,"PUE")}</select></div>\n            <div class="col-md-3 mb-3"><label class="form-label">Forma de pago *</label><select id="fac_forma" class="selectpicker w-100" data-live-search="true">${opcionesSAT(d,"01")}</select></div>\n          </div>\n          <h6 class="mt-2">Partidas</h6>\n          <div class="table-responsive" style="max-height:220px"><table class="table table-sm table-striped"><thead><tr><th>Producto</th><th class="text-end">Cantidad</th><th class="text-end">Precio unitario</th><th class="text-end">Importe</th></tr></thead><tbody>${g}</tbody></table></div>\n          <div class="ms-auto" style="max-width:320px">\n            <div class="d-flex justify-content-between"><span>Subtotal</span><strong id="fac_subtotal">$0.00</strong></div>\n            <div class="d-flex justify-content-between"><span>IVA</span><strong id="fac_impuesto">$0.00</strong></div>\n            <div class="d-flex justify-content-between border-top mt-1 pt-1"><span>Total</span><strong id="fac_total">$0.00</strong></div>\n          </div>\n        </div>`,showCancelButton:!0,confirmButtonText:"Solicitar factura",cancelButtonText:"Cancelar",didOpen:()=>{inicializarSelectpicker(Swal.getPopup());const a=()=>{const a=Number($("#fac_iva").val()),e=f.reduce((e,t)=>{const o=Number(t.cantidad||0),l="02"===String(t.objeto_impuesto||"02"),s=Number(t.precio||0),i=l&&a>0?Math.round(s/(1+a)*1e6)/1e6:s,r=Math.round(i*o*100)/100;return{subtotal:e.subtotal+r,iva:e.iva+(l?Math.round(r*a*100)/100:0),total:e.total+Number(t.importe||0)}},{subtotal:0,iva:0,total:0});$("#fac_subtotal").text(`$${e.subtotal.toFixed(2)}`),$("#fac_impuesto").text(`$${e.iva.toFixed(2)}`),$("#fac_total").text(`$${e.total.toFixed(2)}`)};$("#fac_iva").on("change",a),$("#fac_cliente").on("change",function(){const a=r.find(a=>String(a.id)===String(this.value));a&&($("#fac_rfc").val(a.rfc||""),$("#fac_razon").val(a.razon_social||a.nombre||""),$("#fac_cp").selectpicker("val",a.codigo_postal||""),$("#fac_regimen").selectpicker("val",a.regimen_fiscal||""),$("#fac_uso").selectpicker("val",a.uso_cfdi||""),$("#fac_correo").val(a.correo||""))}),a()},preConfirm:()=>{const e=v??Number($("#fac_emisor").val());return e?{id:a,issuer_id:e,rfc:$("#fac_rfc").val().trim().toUpperCase(),razon_social:$("#fac_razon").val().trim(),codigo_postal:$("#fac_cp").val().trim(),regimen_fiscal:$("#fac_regimen").val().trim(),uso_cfdi:$("#fac_uso").val().trim(),correo:$("#fac_correo").val().trim(),metodo_pago:$("#fac_metodo").val(),forma_pago:$("#fac_forma").val().trim(),tasa_iva:$("#fac_iva").val()}:(Swal.showValidationMessage("Selecciona un emisor para continuar."),!1)}}).then(t=>{t.isConfirmed&&(mostrarCargando("Emitiendo factura","Esto puede tardar unos segundos, no cierres la ventana..."),$.ajax({url:BASE_URL+"api/ventas.php?tipo=facturar",type:"POST",contentType:"application/json",data:JSON.stringify(t.value),dataType:"json"}).done(o=>{o.estatus?(e?.(o),abrirAccionesFactura(a,t.value.correo)):Swal.fire({icon:"error",title:"No se pudo emitir la factura",text:o.mensaje})}).fail(()=>Swal.fire({icon:"error",title:"No fue posible emitir la factura",text:"Inténtalo de nuevo o contacta al administrador."})))})}).fail(()=>Swal.fire({icon:"error",title:"No se pudieron cargar los datos",text:"Inténtalo más tarde."})):Swal.fire({icon:"info",title:"Facturación no disponible",text:t.mensaje||"Esta empresa no tiene emisores asignados. Contacta al administrador."})}).fail(()=>Swal.fire({icon:"error",title:"No se pudieron consultar los emisores",text:"Inténtalo más tarde o contacta al administrador."}))}
+import { cargarCatalogoSAT, inicializarSelectpicker, opcionesSAT } from './catalogos-sat.js';
+import { abrirAccionesFactura } from './factura-actions.js';
+
+
+function mostrarCargando(titulo, texto = 'Por favor espera...') {
+  Swal.fire({
+    title: titulo,
+    text: texto,
+    allowOutsideClick: false,
+    allowEscapeKey: false,
+    showConfirmButton: false,
+    didOpen: () => Swal.showLoading()
+  });
+}
+
+export function abrirFormularioFactura(idVenta, onSuccess = null) {
+    mostrarCargando('Cargando', 'Obteniendo datos...');
+
+
+  $.get(BASE_URL + 'api/ventas.php?tipo=emisores', null, null, 'json').done((issuerResponse) => {
+    const emisores = issuerResponse.data || [];
+    if (!issuerResponse.estatus || emisores.length === 0) {
+      Swal.fire({ icon: 'info', title: 'Facturación no disponible', text: issuerResponse.mensaje || 'Esta empresa no tiene emisores asignados. Contacta al administrador.' });
+      return;
+    }
+
+    $.when(
+      $.get(BASE_URL + 'api/clientes.php?tipo=combo', null, null, 'json'),
+      $.get(BASE_URL + `api/ventas.php?tipo=detalle&id=${encodeURIComponent(idVenta)}`, null, null, 'json')
+    ).done(async (customerResult, detailResult) => {
+      const resp = customerResult[0];
+      const detail = detailResult[0];
+      if (!detail.estatus) {
+        Swal.fire({ icon: 'error', title: 'No se pudo cargar el detalle', text: detail.mensaje || 'Inténtalo de nuevo.' });
+        return;
+      }
+      const clientes = resp.data || [];
+      let regimenes;
+      let usosCfdi;
+      let formasPago;
+      let metodosPago;
+      try {
+        [regimenes, usosCfdi, formasPago, metodosPago] = await Promise.all([
+          cargarCatalogoSAT('FiscalRegimens'),
+          cargarCatalogoSAT('CfdiUses'),
+          cargarCatalogoSAT('PaymentForms'),
+          cargarCatalogoSAT('PaymentMethods')
+        ]);
+      } catch (error) {
+        Swal.fire({ icon: 'error', title: 'No se pudieron cargar los catálogos SAT', text: error.message });
+        return;
+      }
+      const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+      const opciones = clientes.map((cliente) => `<option value="${Number(cliente.id)}">${escapeHtml(cliente.nombre)}${cliente.rfc ? ` (${escapeHtml(cliente.rfc)})` : ''}</option>`).join('');
+      const items = detail.data.items || [];
+      const selectedIssuerId = emisores.length === 1 ? Number(emisores[0].issuer_id) : null;
+      const issuerControl = emisores.length > 1
+        ? `<div class="mb-3"><label for="fac_emisor" class="form-label">Emisor *</label><select id="fac_emisor" class="form-select" required><option value="">Selecciona un emisor</option>${emisores.map((issuer) => `<option value="${Number(issuer.issuer_id)}">${escapeHtml(issuer.name)}${issuer.rfc ? ` (${escapeHtml(issuer.rfc)})` : ''}</option>`).join('')}</select></div>`
+        : `<p class="mb-3">Emisor: <strong>${escapeHtml(emisores[0].name)}${emisores[0].rfc ? ` (${escapeHtml(emisores[0].rfc)})` : ''}</strong></p>`;
+      const partidas = items.map((item) => `<tr>
+        <td>${escapeHtml(item.producto)}<br><small class="text-muted">${escapeHtml(item.codigo || 'S/C')}</small></td>
+        <td class="text-end">${Number(item.cantidad).toFixed(3)}</td>
+        <td class="text-end">$${Number(item.precio).toFixed(2)}</td>
+        <td class="text-end">$${Number(item.importe).toFixed(2)}</td>
+      </tr>`).join('');
+
+      Swal.fire({
+        title: `Facturar recibo ${escapeHtml(detail.data.venta.folio)}`, width: '900px',
+        html: `<div class="text-start">
+          ${issuerControl}
+          <label class="form-label">Cliente del catálogo</label>
+          <select id="fac_cliente" class="selectpicker w-100 mb-3" data-live-search="true"><option value="">Captura datos fiscales manualmente</option>${opciones}</select>
+          <div class="row">
+            <div class="col-md-6 mb-3"><label class="form-label">RFC *</label><input id="fac_rfc" class="form-control" placeholder="XAXX010101000"></div>
+            <div class="col-md-6 mb-3"><label class="form-label">Razón social *</label><input id="fac_razon" class="form-control"></div>
+          </div>
+          <div class="row">
+            <div class="col-md-3 mb-3"><label class="form-label">Código postal *</label><select id="fac_cp" class="selectpicker w-100" data-catalogo-sat="PostalCodes" data-live-search="true">${opcionesSAT([])}</select></div>
+            <div class="col-md-3 mb-3"><label class="form-label">Régimen fiscal *</label><select id="fac_regimen" class="selectpicker w-100" data-live-search="true">${opcionesSAT(regimenes)}</select></div>
+            <div class="col-md-3 mb-3"><label class="form-label">Uso CFDI *</label><select id="fac_uso" class="selectpicker w-100" data-live-search="true">${opcionesSAT(usosCfdi)}</select></div>
+            <div class="col-md-3 mb-3"><label class="form-label">Tasa IVA</label><select id="fac_iva" class="form-select"><option value="0">0%</option><option value="0.08">8%</option><option value="0.16" selected>16%</option></select></div>
+          </div>
+          <div class="row">
+            <div class="col-md-6 mb-3"><label class="form-label">Correo (opcional)</label><input id="fac_correo" type="email" class="form-control"></div>
+            <div class="col-md-3 mb-3"><label class="form-label">Método de pago *</label><select id="fac_metodo" class="selectpicker w-100" data-live-search="true">${opcionesSAT(metodosPago, 'PUE')}</select></div>
+            <div class="col-md-3 mb-3"><label class="form-label">Forma de pago *</label><select id="fac_forma" class="selectpicker w-100" data-live-search="true">${opcionesSAT(formasPago, '01')}</select></div>
+          </div>
+          <h6 class="mt-2">Partidas</h6>
+          <div class="table-responsive" style="max-height:220px"><table class="table table-sm table-striped"><thead><tr><th>Producto</th><th class="text-end">Cantidad</th><th class="text-end">Precio unitario</th><th class="text-end">Importe</th></tr></thead><tbody>${partidas}</tbody></table></div>
+          <div class="ms-auto" style="max-width:320px">
+            <div class="d-flex justify-content-between"><span>Subtotal</span><strong id="fac_subtotal">$0.00</strong></div>
+            <div class="d-flex justify-content-between"><span>IVA</span><strong id="fac_impuesto">$0.00</strong></div>
+            <div class="d-flex justify-content-between border-top mt-1 pt-1"><span>Total</span><strong id="fac_total">$0.00</strong></div>
+          </div>
+        </div>`,
+        showCancelButton: true, confirmButtonText: 'Solicitar factura', cancelButtonText: 'Cancelar',
+        didOpen: () => {
+          inicializarSelectpicker(Swal.getPopup());
+          const recalcular = () => {
+            const tasa = Number($('#fac_iva').val());
+            const amounts = items.reduce((sum, item) => {
+              const quantity = Number(item.cantidad || 0);
+              const taxable = String(item.objeto_impuesto || '02') === '02';
+              const unitPrice = Number(item.precio || 0);
+              const netUnitPrice = taxable && tasa > 0 ? Math.round((unitPrice / (1 + tasa)) * 1e6) / 1e6 : unitPrice;
+              const subtotal = Math.round(netUnitPrice * quantity * 100) / 100;
+              return {
+                subtotal: sum.subtotal + subtotal,
+                iva: sum.iva + (taxable ? Math.round(subtotal * tasa * 100) / 100 : 0),
+                total: sum.total + Number(item.importe || 0)
+              };
+            }, { subtotal: 0, iva: 0, total: 0 });
+            $('#fac_subtotal').text(`$${amounts.subtotal.toFixed(2)}`);
+            $('#fac_impuesto').text(`$${amounts.iva.toFixed(2)}`);
+            $('#fac_total').text(`$${amounts.total.toFixed(2)}`);
+          };
+          $('#fac_iva').on('change', recalcular);
+          $('#fac_cliente').on('change', function () {
+            const cliente = clientes.find((item) => String(item.id) === String(this.value));
+            if (!cliente) return;
+            $('#fac_rfc').val(cliente.rfc || '');
+            $('#fac_razon').val(cliente.razon_social || cliente.nombre || '');
+            $('#fac_cp').selectpicker('val', cliente.codigo_postal || '');
+            $('#fac_regimen').selectpicker('val', cliente.regimen_fiscal || '');
+            $('#fac_uso').selectpicker('val', cliente.uso_cfdi || '');
+            $('#fac_correo').val(cliente.correo || '');
+          });
+          recalcular();
+        },
+        preConfirm: () => {
+          const issuerId = selectedIssuerId ?? Number($('#fac_emisor').val());
+          if (!issuerId) { Swal.showValidationMessage('Selecciona un emisor para continuar.'); return false; }
+          return { id: idVenta, issuer_id: issuerId, rfc: $('#fac_rfc').val().trim().toUpperCase(), razon_social: $('#fac_razon').val().trim(), codigo_postal: $('#fac_cp').val().trim(), regimen_fiscal: $('#fac_regimen').val().trim(), uso_cfdi: $('#fac_uso').val().trim(), correo: $('#fac_correo').val().trim(), metodo_pago: $('#fac_metodo').val(), forma_pago: $('#fac_forma').val().trim(), tasa_iva: $('#fac_iva').val() };
+        }
+      }).then((result) => {
+        if (!result.isConfirmed) return;
+
+        mostrarCargando('Emitiendo factura', 'Esto puede tardar unos segundos, no cierres la ventana...');
+
+        $.ajax({ url: BASE_URL + 'api/ventas.php?tipo=facturar', type: 'POST', contentType: 'application/json', data: JSON.stringify(result.value), dataType: 'json' })
+          .done((response) => {
+            if (!response.estatus) {
+              Swal.fire({ icon: 'error', title: 'No se pudo emitir la factura', text: response.mensaje });
+              return;
+            }
+            onSuccess?.(response);
+            abrirAccionesFactura(idVenta, result.value.correo);
+          })
+          .fail(() => Swal.fire({ icon: 'error', title: 'No fue posible emitir la factura', text: 'Inténtalo de nuevo o contacta al administrador.' }));
+      });
+    }).fail(() => Swal.fire({ icon: 'error', title: 'No se pudieron cargar los datos', text: 'Inténtalo más tarde.' }));
+  }).fail(() => Swal.fire({ icon: 'error', title: 'No se pudieron consultar los emisores', text: 'Inténtalo más tarde o contacta al administrador.' }));
+}

@@ -21,7 +21,7 @@ function modalAjuste(id_producto, nombreProducto, existenciaActual) {
           <label class="form-label">Tipo de Movimiento</label>
           <select id="ajuste_tipo" class="form-select">
             <option value="entrada">Entrada (+) - Compra menor / Devolución / Sobrante</option>
-            <option value="salida">Salida (-) - Merma / Daño / Uso interno de ferretería</option>
+            <option value="salida">Salida (-) - Merma / Daño / Uso interno del negocio</option>
             <option value="ajuste_fijo">Conteo Físico (=) - Establecer cantidad exacta</option>
           </select>
         </div>

@@ -70,7 +70,7 @@ class Usuario extends Datatable {
             [$id_sucursal, $id_ferreteria]
         );
         if (empty($sucursal_ok)) {
-            return ['estatus' => false, 'mensaje' => 'La sucursal no pertenece a esta ferretería'];
+            return ['estatus' => false, 'mensaje' => 'La sucursal no pertenece a este negocio'];
         }
 
         $rol_ok = $this->db->select(

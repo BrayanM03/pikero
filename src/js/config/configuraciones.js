@@ -21,7 +21,7 @@ $(document).ready(function () {
                             <a href="${BASE_URL}panel_permisos" class="${d_permisos} list-group-item list-group-item-action">Permisos</a>
                             <a href="${BASE_URL}roles" class="${d_permisos} list-group-item list-group-item-action">Roles</a>
                             <a href="${BASE_URL}usuarios" class="${d_usuarios} list-group-item list-group-item-action">Usuarios</a>
-                            <a href="${BASE_URL}ferreterias" class="${d_ferreterias} list-group-item list-group-item-action">Ferreterías</a>
+                            <a href="${BASE_URL}ferreterias" class="${d_ferreterias} list-group-item list-group-item-action">Negocios</a>
                         </div>
                     </div>
                 </div>

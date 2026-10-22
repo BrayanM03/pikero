@@ -7,6 +7,7 @@ enum CPERMISO: string {
     case CREAR_VENTAS = 'crear_ventas';
     case VER_VENTAS = 'ver_ventas';
     case CANCELAR_VENTAS = 'cancelar_ventas';
+    case CAMBIAR_FECHA_VENTAS = 'cambiar_fecha_ventas';
 
     case VER_PRODUCTOS = 'ver_productos';
     case CREAR_PRODUCTOS = 'crear_productos';

@@ -21,7 +21,7 @@ async function modalFerreteria(values = {}, id = null) {
     return;
   }
   Swal.fire({
-    title: id ? 'Editar ferretería' : 'Agregar ferretería',
+    title: id ? 'Editar negocio' : 'Agregar negocio',
     width: '760px',
     html: `<div class="text-start">
       <div class="row">
@@ -85,7 +85,7 @@ async function modalFerreteria(values = {}, id = null) {
     }).done((response) => {
       Toast.fire({ icon: response.estatus ? 'success' : 'error', title: response.mensaje });
       if (response.estatus) tabla?.ajax.reload(null, false);
-    }).fail((xhr) => Toast.fire({ icon: 'error', title: xhr.responseJSON?.mensaje || 'No se pudo guardar la ferretería' }));
+    }).fail((xhr) => Toast.fire({ icon: 'error', title: xhr.responseJSON?.mensaje || 'No se pudo guardar el negocio' }));
   });
 }
 
@@ -95,8 +95,8 @@ window.editarFerreteria = (id) => $.post(`${BASE_URL}api/ferreterias.php?tipo=ob
   else Toast.fire({ icon: 'error', title: response.mensaje });
 }, 'json');
 window.cancelarFerreteria = (id) => Swal.fire({
-  icon: 'warning', title: '¿Cancelar esta ferretería?', text: 'Quedará inactiva, sin borrar su información.',
-  showCancelButton: true, confirmButtonText: 'Cancelar ferretería', cancelButtonText: 'Volver'
+  icon: 'warning', title: '¿Cancelar este negocio?', text: 'Quedará inactiva, sin borrar su información.',
+  showCancelButton: true, confirmButtonText: 'Cancelar negocio', cancelButtonText: 'Volver'
 }).then((result) => {
   if (!result.isConfirmed) return;
   $.post(`${BASE_URL}api/ferreterias.php?tipo=cancelar`, { id }, (response) => {
@@ -108,7 +108,7 @@ window.cancelarFerreteria = (id) => Swal.fire({
 $(document).ready(() => {
   const columns = [
     { data: 'id', title: '#' },
-    { data: 'nombre', title: 'Ferretería', render: (value) => escapeHtml(value) },
+    { data: 'nombre', title: 'Negocio', render: (value) => escapeHtml(value) },
     { data: 'razon_social', title: 'Razón social', render: (value) => escapeHtml(value || 'N/D') },
     { data: 'rfc', title: 'RFC', render: (value) => escapeHtml(value || 'N/D') },
     { data: 'correo', title: 'Correo', render: (value) => escapeHtml(value || 'N/D') },

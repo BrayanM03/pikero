@@ -170,3 +170,12 @@ if($tipo === 'pdf'){
     $pdf->Output('I', 'Nota_' . $venta['folio'] . '.pdf');
     exit;
 }
+
+if($tipo === 'editar_venta') {
+    
+    $id_venta = $_POST['id'] ?? 0;
+    $payload = $_POST ?? [];
+   
+    header('Content-Type: application/json; charset=utf-8');
+    $controller->editar(1, $id_venta, $payload);
+}

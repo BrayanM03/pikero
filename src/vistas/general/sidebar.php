@@ -28,8 +28,8 @@ $es_catalogos = in_array($modulo_actual, $modulos_catalogos, true);
 <nav id="sidebar" class="sidebar js-sidebar">
     <div class="sidebar-content js-simplebar">
         <a class="sidebar-brand text-center mb-2" style="border-bottom:1px solid gray" href="<?php echo BASE_URL; ?>panel">
-            <img src="<?php echo STATIC_URL; ?>img/titulo_logo.png" alt="Pikero" class="bord" style="width:150px; border-radius:7px; margin-right:1rem; margin-bottom:0px; background:#fff; padding:6px;"><br>
-            <span style="font-size:10px; font-weight: 100">Gestión administrativa</span>
+            <img src="<?php echo STATIC_URL; ?>img/logo.webp" alt="Pikero" class="bord" style="width:150px; border-radius:7px; margin-right:1rem; margin-bottom:0px; background:#fff; padding:6px;"><br>
+           <!--  <span style="font-size:10px; font-weight: 100">Gestión administrativa</span> -->
         </a>
 
         <ul class="sidebar-nav">
