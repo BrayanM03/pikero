@@ -8,13 +8,19 @@ $controller_permiso = new PermisoController();
 
 /* $url = isset($_GET['url']) ? $_GET['url'] : 'panel';
 $datos = explode('/', $url); */
-$url = trim($_GET['url'] ?? 'panel', '/');
-
+//$url = trim($_GET['url'] ?? 'panel', '/');
+if (isset($_GET['url'])) {
+    $url = trim($_GET['url'], '/');
+} else {
+    $path = trim(rawurldecode(parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH)), '/');
+    $url = ($path === '' || $path === 'index.php') ? 'panel' : $path;
+}
 $datos = explode('/', $url);
 
 $modulo = $datos[0];
 $accion = isset($datos[1]) ? $datos[1] : null;
 $id     = isset($datos[2]) ? $datos[2] : null;
+
 
 if ($modulo === 'login') {
     include 'src/login.php';

@@ -68,7 +68,7 @@ class PuntoVenta {
 
             // Consultar producto actual y stock
             $prod = $this->db->select(
-                "SELECT p.id, p.nombre, p.precio_venta, u.abreviatura AS unidad, COALESCE(inv.existencia, 0) AS stock
+                "SELECT p.id, p.nombre, p.precio_compra, p.precio_venta, u.abreviatura AS unidad, COALESCE(inv.existencia, 0) AS stock
                  FROM productos p
                  LEFT JOIN unidades u ON u.id = p.id_unidad
                  LEFT JOIN inventario inv ON inv.id_producto = p.id AND inv.id_sucursal = ?
@@ -100,7 +100,8 @@ class PuntoVenta {
                 'precio' => $precio,
                 'importe' => $importe,
                 'stock_actual' => $stockActual,
-                'unidad' => $unidadProducto
+                'unidad' => $unidadProducto,
+                'costo' => (float)$prod[0]['precio_compra']
             ];
         }
 
@@ -189,14 +190,15 @@ class PuntoVenta {
                     'id_producto' => $it['id_producto'],
                     'cantidad' => $it['cantidad'],
                     'precio' => $it['precio'],
-                    'importe' => $it['importe']
+                    'importe' => $it['importe'],
+                    'costo' => $it['costo']
                 ]);
 
                 // Descontar inventario
                 $stock_nuevo = $it['stock_actual'] - $it['cantidad'];
 
                 $inv = $this->db->select(
-                    "SELECT id FROM inventario WHERE id_producto = ? AND id_sucursal = ? AND id_ferreteria = ?",
+                    "SELECT i.id FROM inventario i WHERE i.id_producto = ? AND i.id_sucursal = ? AND i.id_ferreteria = ?",
                     [$it['id_producto'], $this->id_sucursal, $this->id_ferreteria]
                 );
 
