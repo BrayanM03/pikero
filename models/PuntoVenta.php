@@ -93,6 +93,7 @@ class PuntoVenta {
             $importe = $precio * $cantidad;
             $subtotal += $importe;
 
+            $costo_total = (float)$prod[0]['precio_compra'] * $cantidad;
             $itemsValidados[] = [
                 'id_producto' => $id_producto,
                 'nombre' => $prod[0]['nombre'],
@@ -101,7 +102,7 @@ class PuntoVenta {
                 'importe' => $importe,
                 'stock_actual' => $stockActual,
                 'unidad' => $unidadProducto,
-                'costo' => (float)$prod[0]['precio_compra']
+                'costo' => $costo_total
             ];
         }
 
