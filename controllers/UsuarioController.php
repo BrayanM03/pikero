@@ -79,6 +79,7 @@ class UsuarioController extends DataTableController {
             if (!$ferreteria) {
                 $response = ['estatus' => false, 'mensaje' => 'La ferretería seleccionada no está disponible'];
             } else {
+                $this->model->actualizarUsuario($_SESSION['id'], ['id_ferreteria' => (int)$ferreteria['id']]);
                 $_SESSION['id_ferreteria'] = (int)$ferreteria['id'];
                 $_SESSION['ferreteria'] = $ferreteria['nombre'];
                 $_SESSION['logo_ferreteria'] = $ferreteria['logo'] ?? '';

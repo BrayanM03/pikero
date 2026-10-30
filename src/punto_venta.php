@@ -79,8 +79,24 @@ include "vistas/general/header.php";
                                     </div>
 
                                     <div class="mb-3">
-                                        <label class="form-label fw-bold">Forma de Pago</label>
-                                        <select id="pos-forma-pago" class="form-select"></select>
+                                        <label class="form-label fw-bold">Forma de Pago</label><br>
+                                        <select id="pos-forma-pago" multiple class="form-control selectpicker" onchange="setearFormaPago()"></select>
+                                    <div class="col-12 col-md-12 d-none" id="col-formas-pago">
+                                            <div class="row mt-3">
+                                                <div class="col-12">
+                                                    <div class="area-formas-pago" id="area-formas-pago">
+                                                        <label><b>Montos de la forma de pago</b></label><br>
+                                                        <div class="row mt-3" id="lista-formas-pago">
+                                                            <div class="col-12 text-start">
+                                                                Sin formas de pago seleccionadas
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                    <small id="small_area-formas-pago" style="color:tomato;"></small>
+
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
 
                                     <div class="mb-3">

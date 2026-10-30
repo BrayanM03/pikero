@@ -73,6 +73,7 @@ $user_P = $permisos_usuario['data'] ?? [];
 	const BASE_URL = "<?php echo BASE_URL; ?>";
 	const STATIC_URL = "<?php echo STATIC_URL; ?>";
 	const SUPABASE_URL = "<?php echo SUPABASE_URL; ?>";
+	const SUPABASE_STORAGE_URL = "<?php echo SUPABASE_STORAGE_URL; ?>";
 	const USER_PERMISSIONS = {
 		can_view_sucursales: <?php echo $sucursales_p['estatus'] ? 'true' : 'false'; ?>,
 		can_view_permisos: <?php echo $permisos_p['estatus'] ? 'true' : 'false'; ?>,

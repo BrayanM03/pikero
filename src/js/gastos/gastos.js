@@ -71,6 +71,22 @@ async function abrirFormulario(gasto = null) {
     if (categorias.length === 0) return;
   }
 
+   let formasPago;
+   $.get(BASE_URL + 'api/punto_venta.php?tipo=catalogos', function (resp) {
+    if (!resp.estatus) return;
+    formasPago = resp.data.formas_pago || [];
+
+    const selectFp = document.getElementById('gasto-forma-pago');
+    selectFp.innerHTML = '';
+    formasPago.forEach((f) => {
+      selectFp.innerHTML += `<option value="${f.id}">${f.nombre}</option>`;
+    });
+    if (formasPago.length) {
+      $('#gasto-forma-pago').val(String(formasPago[0].id));
+    }
+    $('#gasto-forma-pago').selectpicker('refresh');
+  }, 'json');
+
   const editing = Boolean(gasto);
   const today = new Date();
   const localToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
@@ -82,8 +98,10 @@ async function abrirFormulario(gasto = null) {
     width: '760px',
     html: `<form id="form-gasto" class="text-start" enctype="multipart/form-data">
       <div class="row">
-        <div class="col-md-6 mb-3"><label class="form-label" for="gasto-sucursal">Sucursal *</label><select id="gasto-sucursal" class="selectpicker w-100" data-live-search="true" required></select></div>
-        <div class="col-md-6 mb-3"><label class="form-label" for="gasto-categoria">Categoría *</label><select id="gasto-categoria" class="selectpicker w-100" data-live-search="true" required></select></div>
+        <div class="col-md-3 mb-3"><label class="form-label" for="gasto-sucursal">Sucursal *</label><select id="gasto-sucursal" class="selectpicker w-100" data-live-search="true" required></select></div>
+        <div class="col-md-3 mb-3"><label class="form-label" for="gasto-categoria">Categoría *</label><select id="gasto-categoria" class="selectpicker w-100" data-live-search="true" required></select></div>
+        <div class="col-md-3 mb-3"><label class="form-label" for="gasto-categoria">Forma de pago *</label>
+        <select id="gasto-forma-pago" class="selectpicker w-100" data-live-search="true" required></select></div>
       </div>
       <div class="row">
         <div class="col-md-4 mb-3"><label class="form-label" for="gasto-monto">Monto *</label><input id="gasto-monto" class="form-control" type="number" min="0.01" step="0.01" required value="${editing ? Number(gasto.monto).toFixed(2) : ''}"></div>
@@ -116,6 +134,7 @@ async function abrirFormulario(gasto = null) {
         id_categoria: document.getElementById('gasto-categoria').value,
         monto: document.getElementById('gasto-monto').value,
         fecha: document.getElementById('gasto-fecha').value,
+        formas_pago: document.getElementById('gasto-forma-pago').value,
         folio: document.getElementById('gasto-folio').value.trim(),
         descripcion: document.getElementById('gasto-descripcion').value.trim(),
         comprobante: file || null
@@ -181,17 +200,18 @@ window.editarGasto = editarGasto;
 window.cancelarGasto = cancelarGasto;
 
 $(document).ready(async () => {
+  console.log(SUPABASE_URL);
   const columns = [
     { data: 'id', title: '#' },
     { data: 'fecha', title: 'Fecha' },
     { data: 'sucursal', title: 'Sucursal' },
     { data: 'categoria', title: 'Categoría' },
-    { data: 'descripcion', title: 'Descripción' },
+    { data: 'descripcion', title: 'Descripción' }, 
     { data: 'folio', title: 'Folio / factura', render: (value) => value || '<span class="text-muted">—</span>' },
     { data: 'monto', title: 'Monto', render: (value) => `<strong>$${Number(value || 0).toFixed(2)}</strong>` },
     { data: 'usuario', title: 'Registró' },
     { data: null, title: 'Comprobante', orderable: false, render: (data, type, row) => row.comprobante_url
-      ? `<a class="btn btn-outline-secondary btn-sm" href="${escapeHtml(row.comprobante_url)}" target="_blank" rel="noopener noreferrer" title="Ver comprobante"><i class="fa-solid fa-paperclip"></i></a>`
+      ? `<a class="btn btn-outline-secondary btn-sm" href="${SUPABASE_STORAGE_URL + escapeHtml(row.comprobante_url)}" target="_blank" rel="noopener noreferrer" title="Ver comprobante"><i class="fa-solid fa-paperclip"></i></a>`
       : '<span class="text-muted">—</span>' },
     { data: null, title: 'Estado', orderable: false, render: (data, type, row) => Number(row.estatus) === 1
       ? '<span class="badge bg-success">Activo</span>' : '<span class="badge bg-secondary">Cancelado</span>' },

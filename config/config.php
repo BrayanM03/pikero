@@ -45,6 +45,7 @@ $dotenv = Dotenv\Dotenv::createImmutable(__DIR__ . '/..');
 $dotenv->safeLoad();
 
 define('SUPABASE_URL', $_ENV['SUPABASE_URL'] ?? '');
+define('SUPABASE_STORAGE_URL', SUPABASE_URL . '/storage/v1/object/public/pikero_public/' ?? '');
 define('SUPABASE_SERVICE_KEY', $_ENV['SUPABASE_SERVICE_KEY'] ?? '');
 
 require_once __DIR__ . '/../utils/SchemaMigrator.php';

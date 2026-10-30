@@ -33,7 +33,6 @@ class PDF_VentaReporte extends FPDF {
                 if ($im) {
                     $tmpLogo = tempnam(sys_get_temp_dir(), 'logo_') . '.png';
                     imagepng($im, $tmpLogo);
-                    imagedestroy($im);
                     $logoPath = $tmpLogo;
                 }
             }

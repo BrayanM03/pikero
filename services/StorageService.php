@@ -40,8 +40,6 @@ class StorageService
         $curlError = curl_error($ch);
         $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 
-        curl_close($ch);
-
         if ($response === false) {
             throw new Exception('Error de cURL: ' . $curlError);
         }

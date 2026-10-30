@@ -109,7 +109,7 @@ class Gasto {
             return ['estatus' => false, 'mensaje' => 'Esa categoría ya está registrada'];
         }
     }
-
+ 
     public function registrar(array $data, ?array $file): array {
         $values = $this->validarDatos($data);
         if (!$values['estatus']) return $values;
@@ -127,6 +127,7 @@ class Gasto {
                 'id_categoria' => $values['id_categoria'],
                 'id_usuario' => (int)($_SESSION['id'] ?? 0),
                 'monto' => $values['monto'],
+                'id_forma_pago' => $values['formas_pago'],
                 'fecha' => $values['fecha'],
                 'folio' => $values['folio'],
                 'descripcion' => $values['descripcion'],

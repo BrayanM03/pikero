@@ -5,6 +5,30 @@ let carrito = [];
 let clientes = [];
 let formasPago = [];
 let searchTimeout = null;
+let pagosCache = {}; // montos y referencias capturados por forma de pago
+
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const centavos = (n) => Math.round(Number(n) * 100);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function obtenerTotalCarrito() {
+  // Redondeo por partida, igual que el backend
+  return round2(carrito.reduce((acc, it) => acc + round2(it.precio * it.cantidad), 0));
+}
+
+// Monto que se cobra ahora: el total en contado, o el abono inicial en crédito
+function obtenerMontoACobrar() {
+  if ($('#pos-tipo-venta').val() === 'credito') {
+    return round2(parseFloat($('#pos-abono-inicial').val()) || 0);
+  }
+  return obtenerTotalCarrito();
+}
+
+function seleccionFormasPago() {
+  return $('#pos-forma-pago option:selected').map(function () {
+    return { id: Number($(this).val()), nombre: $(this).text().trim() };
+  }).get();
+}
 
 function cargarCatalogos() {
   $.get(BASE_URL + 'api/punto_venta.php?tipo=catalogos', function (resp) {
@@ -23,6 +47,11 @@ function cargarCatalogos() {
     formasPago.forEach((f) => {
       selectFp.innerHTML += `<option value="${f.id}">${f.nombre}</option>`;
     });
+    if (formasPago.length) {
+      $('#pos-forma-pago').val(String(formasPago[0].id));
+    }
+    $('#pos-forma-pago').selectpicker('refresh');
+    setearFormaPago();
   }, 'json');
 }
 
@@ -89,6 +118,7 @@ function actualizarTotales() {
     abonoInicial.value = subtotal.toFixed(2);
   }
   calcularCambio();
+  actualizarRestantePagos();
 }
 
 function calcularCambio() {
@@ -168,6 +198,137 @@ function agregarProductoAlCarrito(producto, cantidad = 1) {
 
   renderCarrito();
 }
+
+function guardarPagosCache() {
+  $('.input-forma-pago').each(function () {
+    const id = $(this).data('id');
+    pagosCache[id] = pagosCache[id] || {};
+    pagosCache[id].monto = $(this).val();
+  });
+  $('.input-referencia-pago').each(function () {
+    const id = $(this).data('id');
+    pagosCache[id] = pagosCache[id] || {};
+    pagosCache[id].referencia = $(this).val();
+  });
+}
+
+function limpiarPagosCapturados() {
+  pagosCache = {};
+  $('.input-forma-pago, .input-referencia-pago').val('');
+  actualizarRestantePagos();
+}
+
+// El bloque de efectivo (paga con / cambio) solo aplica en contado con una sola forma de pago
+function actualizarVisibilidadEfectivo(cantidadFormas = seleccionFormasPago().length) {
+  const esCredito = $('#pos-tipo-venta').val() === 'credito';
+  document.getElementById('bloque-efectivo').classList.toggle('d-none', esCredito || cantidadFormas > 1);
+}
+
+function actualizarRestantePagos() {
+  const el = $('#pagos-restante');
+  if (!el.length) return;
+
+  let suma = 0;
+  $('.input-forma-pago').each(function () { suma += parseFloat($(this).val()) || 0; });
+  const restante = round2(obtenerMontoACobrar() - suma);
+
+  if (restante === 0) {
+    el.attr('class', 'mt-2 fw-bold text-success').text('Pagos completos');
+  } else if (restante > 0) {
+    el.attr('class', 'mt-2 fw-bold text-danger').text(`Faltan $${restante.toFixed(2)}`);
+  } else {
+    el.attr('class', 'mt-2 fw-bold text-danger').text(`Sobran $${Math.abs(restante).toFixed(2)}`);
+  }
+}
+
+function setearFormaPago() {
+  const seleccion = seleccionFormasPago();
+  const colFormasPago = $('#col-formas-pago');
+  const area = $('#area-formas-pago');
+
+  guardarPagosCache(); // conservar lo capturado antes de redibujar
+  area.empty();
+  actualizarVisibilidadEfectivo(seleccion.length);
+
+  // Con una sola forma de pago el monto es todo lo que se cobra: no hay nada que capturar
+  if (seleccion.length < 2) {
+    colFormasPago.addClass('d-none');
+    return;
+  }
+
+  colFormasPago.removeClass('d-none');
+
+  let html = '<label class="mb-2"><b>Montos por forma de pago</b></label><div class="row g-2">';
+  seleccion.forEach((fp) => {
+    const c = pagosCache[fp.id] || {};
+    html += `
+      <div class="col-12 col-md-6">
+        <label class="small fw-bold">${esc(fp.nombre)}</label>
+        <div class="input-group input-group-sm mb-1">
+          <span class="input-group-text">$</span>
+          <input type="number" min="0" step="0.01" class="form-control input-forma-pago" data-id="${fp.id}" value="${esc(c.monto ?? '')}" placeholder="0.00">
+          <button type="button" class="btn btn-outline-secondary btn-completar-pago" data-id="${fp.id}" title="Completar con el restante">Resto</button>
+        </div>
+        <input type="text" maxlength="100" class="form-control form-control-sm input-referencia-pago" data-id="${fp.id}" value="${esc(c.referencia ?? '')}" placeholder="Referencia / autorización (opcional)">
+      </div>`;
+  });
+  html += '</div><div id="pagos-restante" class="mt-2 fw-bold"></div>';
+
+  area.html(html);
+  actualizarRestantePagos();
+}
+
+// Devuelve { pagos } o { error }. montoACobrar = total (contado) o abono inicial (crédito)
+function obtenerPagos(montoACobrar) {
+  const seleccion = seleccionFormasPago();
+  if (seleccion.length === 0) {
+    return { error: 'Selecciona al menos una forma de pago' };
+  }
+
+  if (seleccion.length === 1) {
+    return {
+      pagos: [{ id_forma_pago: seleccion[0].id, nombre: seleccion[0].nombre, monto: montoACobrar, referencia: null }]
+    };
+  }
+
+  const pagos = [];
+  let suma = 0;
+  seleccion.forEach((fp) => {
+    const monto = round2(parseFloat($(`.input-forma-pago[data-id="${fp.id}"]`).val()) || 0);
+    if (monto <= 0) return;
+    const referencia = ($(`.input-referencia-pago[data-id="${fp.id}"]`).val() || '').trim();
+    pagos.push({ id_forma_pago: fp.id, nombre: fp.nombre, monto, referencia: referencia || null });
+    suma += monto;
+  });
+
+  if (pagos.length === 0) {
+    return { error: 'Captura el monto de cada forma de pago' };
+  }
+  if (centavos(suma) !== centavos(montoACobrar)) {
+    return { error: `La suma de los pagos ($${round2(suma).toFixed(2)}) debe ser igual a $${montoACobrar.toFixed(2)}` };
+  }
+  return { pagos };
+}
+
+function estilizarBordes(id, mensaje, estatus){
+  if(!estatus){
+    $(`#${id}`).css('border', '1px solid red')                 
+    let hermano= $(`#${id}`).next()
+    if (!hermano.is("small")) {
+        hermano.removeClass('border-success').addClass('border-red')
+      }
+  }else{
+    $(`#${id}`).css('border', '1px solid #59de64') 
+    let hermano= $(`#${id}`).next()
+    if (!hermano.is("small")) {
+      hermano.removeClass('border-red').addClass('border-success')
+    }
+  }
+  $(`#small_${id}`).text(mensaje)
+  $(`#${id}`).selectpicker('refresh')
+}
+
+window.setearFormaPago = setearFormaPago;
 
 window.modificarCantidad = (index, delta) => {
   if (!carrito[index]) return;
@@ -266,25 +427,14 @@ function procesarCobro() {
     return;
   }
 
-  let total = 0;
-  carrito.forEach((it) => { total += it.precio * it.cantidad; });
+  const total = obtenerTotalCarrito();
 
   const id_cliente = document.getElementById('pos-cliente').value;
   const tipo_venta = document.getElementById('pos-tipo-venta').value;
-  const abono_inicial = tipo_venta === 'credito' ? (parseFloat(document.getElementById('pos-abono-inicial').value) || 0) : total;
-  const id_forma_pago = tipo_venta === 'credito' && abono_inicial === 0 ? '' : document.getElementById('pos-forma-pago').value;
+  const abono_inicial = tipo_venta === 'credito' ? round2(parseFloat(document.getElementById('pos-abono-inicial').value) || 0) : total;
   const clienteNombre = document.getElementById('pos-cliente').selectedOptions[0]?.text || 'Público en general';
-  const formaPagoNombre = id_forma_pago ? (document.getElementById('pos-forma-pago').selectedOptions[0]?.text || 'Efectivo') : 'Pendiente de abono';
-  const pagoCon = tipo_venta === 'credito' ? abono_inicial : (parseFloat(document.getElementById('pos-pago-con').value) || total);
   const fecha_venta = document.getElementById('pos-fecha').value;
-  if (tipo_venta === 'contado' && pagoCon < total) {
-    Swal.fire({
-      icon: 'warning',
-      title: 'Monto insuficiente',
-      text: `El monto recibido ($${pagoCon.toFixed(2)}) es menor que el total de la venta ($${total.toFixed(2)})`
-    });
-    return;
-  }
+
   if (tipo_venta === 'credito' && (!id_cliente || $('#pos-cliente option:selected').data('publico') === 1)) {
     Toast.fire({ icon: 'warning', title: 'Selecciona un cliente registrado para vender a crédito' });
     return;
@@ -294,7 +444,39 @@ function procesarCobro() {
     return;
   }
 
-  const cambio = tipo_venta === 'contado' ? pagoCon - total : 0;
+  // Pagos: una o varias formas de pago (contado o abono inicial de crédito)
+  let pagos = [];
+  if (abono_inicial > 0) {
+    const resPagos = obtenerPagos(abono_inicial);
+    if (resPagos.error) {
+      Toast.fire({ icon: 'warning', title: resPagos.error });
+      return;
+    }
+    pagos = resPagos.pagos;
+  }
+  const mixto = pagos.length > 1;
+
+  // El cambio solo aplica con una forma de pago; con pagos mixtos los montos deben ser exactos
+  const pagoCon = tipo_venta === 'credito'
+    ? abono_inicial
+    : (mixto ? total : (parseFloat(document.getElementById('pos-pago-con').value) || total));
+
+  if (tipo_venta === 'contado' && centavos(pagoCon) < centavos(total)) {
+    Swal.fire({
+      icon: 'warning',
+      title: 'Monto insuficiente',
+      text: `El monto recibido ($${pagoCon.toFixed(2)}) es menor que el total de la venta ($${total.toFixed(2)})`
+    });
+    return;
+  }
+
+  const cambio = tipo_venta === 'contado' ? round2(pagoCon - total) : 0;
+
+  const lineaPago = (p) => `${esc(p.nombre)}: $${p.monto.toFixed(2)}${p.referencia ? ' (ref. ' + esc(p.referencia) + ')' : ''}`;
+  const desgloseConfirm = pagos.length ? pagos.map(lineaPago).join('<br>') : 'Pendiente de abono';
+  const desgloseTicket = pagos.length
+    ? pagos.map((p) => `<div class="d-flex justify-content-between"><span>${esc(p.nombre)}</span><span>$${p.monto.toFixed(2)}</span></div>`).join('')
+    : '<div>Pendiente de abono</div>';
 
   Swal.fire({
     title: 'Confirmar Cobro',
@@ -302,7 +484,7 @@ function procesarCobro() {
       <div class="text-start">
         <p><strong>Cliente:</strong> ${clienteNombre}</p>
         <p><strong>Tipo de venta:</strong> ${tipo_venta === 'credito' ? 'Crédito' : 'Contado'}</p>
-        <p><strong>Forma de Pago:</strong> ${formaPagoNombre}</p>
+        <p><strong>Forma de Pago:</strong><br>${desgloseConfirm}</p>
         <h3 class="text-center text-success my-3">Total: $${total.toFixed(2)}</h3>
         <p><strong>${tipo_venta === 'credito' ? 'Abono inicial:' : 'Paga con:'}</strong> $${pagoCon.toFixed(2)}</p>
         ${tipo_venta === 'credito' ? `<p><strong>Saldo pendiente:</strong> $${(total - pagoCon).toFixed(2)}</p>` : `<p><strong>Cambio:</strong> $${cambio.toFixed(2)}</p>`}
@@ -315,11 +497,11 @@ function procesarCobro() {
 
     const payload = {
       id_cliente,
-      id_forma_pago,
       tipo_venta,
       abono_inicial,
       fecha_venta,
-      items: carrito
+      items: carrito,
+      pagos: pagos.map(({ id_forma_pago, monto, referencia }) => ({ id_forma_pago, monto, referencia }))
     };
 
     $.ajax({
@@ -354,7 +536,8 @@ function procesarCobro() {
               <div>Folio: <strong>${resp.folio}</strong></div>
               <div>Cliente: ${clienteNombre}</div>
               <div>Tipo de venta: ${tipo_venta === 'credito' ? 'Crédito' : 'Contado'}</div>
-              <div>Forma de pago: ${formaPagoNombre}</div>
+              <div>Forma de pago:</div>
+              ${desgloseTicket}
               <hr class="my-1">
               <table class="w-100">
                 ${itemsTicket}
@@ -396,6 +579,7 @@ function procesarCobro() {
           // Reset carrito
           carrito = [];
           document.getElementById('pos-pago-con').value = '';
+          limpiarPagosCapturados();
           renderCarrito();
         });
       },
@@ -408,6 +592,19 @@ function procesarCobro() {
 
 $(document).ready(function () {
   cargarCatalogos();
+
+  $('#pos-forma-pago').on('change', setearFormaPago);
+  $(document).on('input', '.input-forma-pago', actualizarRestantePagos);
+  $(document).on('click', '.btn-completar-pago', function () {
+    const id = $(this).data('id');
+    let otros = 0;
+    $('.input-forma-pago').each(function () {
+      if ($(this).data('id') !== id) otros += parseFloat($(this).val()) || 0;
+    });
+    const resto = Math.max(0, round2(obtenerMontoACobrar() - otros));
+    $(`.input-forma-pago[data-id="${id}"]`).val(resto.toFixed(2));
+    actualizarRestantePagos();
+  });
 
   const buscador = document.getElementById('pos-buscador');
 
@@ -442,7 +639,7 @@ $(document).ready(function () {
   document.getElementById('pos-tipo-venta').addEventListener('change', function() {
     const esCredito = this.value === 'credito';
     document.getElementById('bloque-abono-inicial').classList.toggle('d-none', !esCredito);
-    document.getElementById('bloque-efectivo').classList.toggle('d-none', esCredito);
+    actualizarVisibilidadEfectivo();
     if (esCredito && $('#pos-cliente option:selected').data('publico') === 1) {
       $('#pos-cliente').val(clientes.find((cliente) => Number(cliente.es_publico) !== 1)?.id || '');
     }

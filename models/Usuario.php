@@ -1,4 +1,4 @@
-<?php
+<?php 
 require_once __DIR__ . '/../config/conexion.php';
 require_once __DIR__ . '/../config/dates.php';
 require_once __DIR__ . '/../models/Datatable.php';
@@ -236,7 +236,8 @@ class Usuario extends Datatable {
 
     public function actualizarUsuario($id_usuario, $data_update) {
         if ($this->id_ferreteria) {
-            return $this->db->update('usuarios', $data_update, 'id = ? AND id_ferreteria = ?', [$id_usuario, $this->id_ferreteria]);
+            return $this->db->update('usuarios', $data_update, 'id = ?', 
+            [$id_usuario]);
         }
         return $this->db->update('usuarios', $data_update, 'id = ?', [$id_usuario]);
     }

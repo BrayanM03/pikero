@@ -50,7 +50,7 @@ class ReportService {
             'default' => 'c.fecha_compra'
         ],
         'gastos' => [
-            'select' => 'g.id, g.fecha, s.nombre AS sucursal, cat.nombre AS categoria, g.descripcion, g.folio, g.monto, CONCAT(u.nombre, \' \', u.apellido) AS usuario, g.estatus',
+            'select' => 'g.id, g.fecha, s.nombre AS sucursal, cat.nombre AS categoria, g.descripcion, g.folio, g.monto, CONCAT(u.nombre, \' \', u.apellido) AS usuario, g.estatus, g.comprobante as comprobante_url',
             'from' => 'gastos g INNER JOIN sucursales s ON s.id = g.id_sucursal INNER JOIN categorias_gastos cat ON cat.id = g.id_categoria INNER JOIN usuarios u ON u.id = g.id_usuario',
             'scope' => 'g.id_ferreteria = :ferreteria', 'date' => 'g.fecha',
             'search' => ['g.folio', 'g.descripcion', 'cat.nombre', 's.nombre', 'u.nombre', 'u.apellido'],

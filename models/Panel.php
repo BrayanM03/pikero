@@ -6,11 +6,13 @@ class Panel {
     private Database $db;
     private ?int $id_ferreteria;
     private ?int $id_sucursal;
+    private ?int $id_usuario;
 
     public function __construct(?int $id_ferreteria = null, ?int $id_sucursal = null) {
         $this->db = new Database();
         $this->id_ferreteria = $id_ferreteria ?? Tenant::idFerreteria();
         $this->id_sucursal = $id_sucursal ?? Tenant::idSucursal();
+        $this->id_usuario = $_SESSION['id'];
     }
 
     public function resumen(): array {
@@ -18,19 +20,28 @@ class Panel {
         $fin = date('Y-m-d 00:00:00', strtotime('+1 day'));
         $params = [$this->id_ferreteria, $this->id_sucursal, $inicio, $fin];
         $ventas = $this->db->select(
-            'SELECT COUNT(*) AS cantidad, COALESCE(SUM(total), 0) AS total
+            'SELECT COUNT(*) AS cantidad, 
+                COALESCE(SUM(costo), 0) AS costo,
+                COALESCE(SUM(utilidad), 0) AS utilidad,
+                COALESCE(SUM(total), 0) AS total
              FROM ventas WHERE id_ferreteria = ? AND id_sucursal = ? AND estatus = 1
              AND fecha_registro >= ? AND fecha_registro < ?',
             $params
         );
+        
+        $gastos = $this->db->select("SELECT SUM(monto) as total FROM gastos WHERE id_ferreteria = ? AND id_sucursal = ? AND estatus = 1
+        AND fecha >= ? AND fecha < ?", $params);
+      
         $productos = $this->db->select(
             'SELECT COUNT(*) AS total FROM productos WHERE id_ferreteria = ? AND estatus = 1',
             [$this->id_ferreteria]
         );
+
         $clientes = $this->db->select(
             'SELECT COUNT(*) AS total FROM clientes WHERE id_ferreteria = ? AND estatus = 1 AND es_publico = 0',
             [$this->id_ferreteria]
         );
+
         $cajas = $this->db->select(
             "SELECT id, estado, monto_apertura, total_ventas, total_entradas, total_salidas, fecha_apertura
              FROM cajas WHERE id_ferreteria = ? AND id_sucursal = ? AND estado = 'abierta'
@@ -38,14 +49,41 @@ class Panel {
             [$this->id_ferreteria, $this->id_sucursal]
         );
 
+
+        $params_pagos = array_merge($params, [$this->id_usuario]);
+        $pagosHoy = $this->db->select(
+                "SELECT fp.id, fp.nombre, SUM(dp.monto) AS total
+                FROM detalle_pagos dp
+                JOIN formas_pago fp ON fp.id = dp.id_forma_pago
+                INNER JOIN cajas c ON c.id = dp.id_caja
+                LEFT JOIN abonos_venta a ON a.id = dp.id_abono_venta
+                JOIN ventas v ON v.id = COALESCE(dp.id_venta, a.id_venta)
+                WHERE dp.id_ferreteria = ? AND dp.id_sucursal = ? AND v.estatus = 1
+                AND dp.fecha_registro >= ? AND dp.fecha_registro < ?
+                AND c.estado ='abierta' AND c.id_usuario = ?
+                GROUP BY fp.id, fp.nombre
+                ORDER BY total DESC",
+                $params_pagos
+            );
+
+            $cobradoHoy = array_sum(array_column($pagosHoy, 'total'));
+          
+
         return [
             'estatus' => true,
             'data' => [
                 'ventas_hoy' => (float)($ventas[0]['total'] ?? 0),
+                'gastos_hoy' => (float)($gastos[0]['total'] ?? 0),
+                'utilidad' => (float)($ventas[0]['utilidad'] ?? 0),
                 'cantidad_ventas_hoy' => (int)($ventas[0]['cantidad'] ?? 0),
                 'productos' => (int)($productos[0]['total'] ?? 0),
                 'clientes' => (int)($clientes[0]['total'] ?? 0),
                 'caja_abierta' => !empty($cajas),
+                'cobrado_hoy' => round((float)$cobradoHoy, 2),
+                'cobrado_por_forma_pago' => array_map(
+                    fn($r) => ['id' => (int)$r['id'], 'nombre' => $r['nombre'], 'total' => (float)$r['total']],
+                    $pagosHoy
+                ),
                 'caja' => $cajas[0] ?? null
             ]
         ];
