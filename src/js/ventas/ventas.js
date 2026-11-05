@@ -194,7 +194,7 @@ function cancelarVenta(id_venta, folio) {
   Swal.fire({
     icon: 'warning',
     title: '¿Cancelar Venta ' + folio + '?',
-    text: 'Esta acción cancelará el ticket y devolverá automáticamente las cantidades vendidas al inventario.',
+    text: 'Esta acción cancelará el ticket y devolverá automáticamente las cantidades vendidas al inventario. Ademas no canceles el ticket si esta facturado, primero cancela la factura.',
     input: 'text',
     inputLabel: 'Motivo de la cancelación',
     inputPlaceholder: 'Ej: Devolución de mercancía / Error de captura',
@@ -220,32 +220,7 @@ function cancelarVenta(id_venta, folio) {
   });
 }
 
-function facturarVenta(id_venta) {
 
-  $.get(BASE_URL + 'api/clientes.php?tipo=combo', (resp) => {
-    const clientes = resp.data || [];
-    const opciones = clientes.map((cliente) => `<option value="${cliente.id}" data-rfc="${cliente.rfc || ''}">${cliente.nombre}${cliente.rfc ? ` (${cliente.rfc})` : ''}</option>`).join('');
-    Swal.fire({
-      title: 'Facturar recibo',
-      width: '700px',
-      html: `<div class="text-start">
-        <label class="form-label">Cliente del catálogo</label><select id="fac_cliente" class="form-select mb-3"><option value="">Captura datos fiscales manualmente</option>${opciones}</select>
-        <div class="row"><div class="col-md-6 mb-3"><label class="form-label">RFC *</label><input id="fac_rfc" class="form-control" placeholder="XAXX010101000"></div><div class="col-md-6 mb-3"><label class="form-label">Razón social *</label><input id="fac_razon" class="form-control"></div></div>
-        <div class="row"><div class="col-md-4 mb-3"><label class="form-label">Código postal *</label><input id="fac_cp" class="form-control" maxlength="5"></div><div class="col-md-4 mb-3"><label class="form-label">Régimen fiscal *</label><input id="fac_regimen" class="form-control" placeholder="601"></div><div class="col-md-4 mb-3"><label class="form-label">Uso CFDI *</label><input id="fac_uso" class="form-control" placeholder="G03"></div></div>
-        <div class="row"><div class="col-md-6 mb-3"><label class="form-label">Correo para XML/PDF *</label><input id="fac_correo" type="email" class="form-control"></div><div class="col-md-3 mb-3"><label class="form-label">Método</label><select id="fac_metodo" class="form-select"><option value="PUE">PUE</option><option value="PPD">PPD</option></select></div><div class="col-md-3 mb-3"><label class="form-label">Forma</label><input id="fac_forma" class="form-control" placeholder="01"></div></div>
-      </div>`,
-      showCancelButton: true, confirmButtonText: 'Solicitar factura', cancelButtonText: 'Cancelar',
-      didOpen: () => $('#fac_cliente').on('change', function () { const cliente = clientes.find((item) => String(item.id) === String(this.value)); if (!cliente) return; $('#fac_rfc').val(cliente.rfc || ''); $('#fac_razon').val(cliente.nombre || ''); $('#fac_cp').val(cliente.codigo_postal || ''); $('#fac_regimen').val(cliente.regimen_fiscal || ''); $('#fac_uso').val(cliente.uso_cfdi || ''); $('#fac_correo').val(cliente.correo || ''); }),
-      preConfirm: () => ({ id: id_venta, rfc: $('#fac_rfc').val().trim().toUpperCase(), razon_social: $('#fac_razon').val().trim(), codigo_postal: $('#fac_cp').val().trim(), regimen_fiscal: $('#fac_regimen').val().trim(), uso_cfdi: $('#fac_uso').val().trim(), correo: $('#fac_correo').val().trim(), metodo_pago: $('#fac_metodo').val(), forma_pago: $('#fac_forma').val().trim() })
-    }).then((result) => { 
-      if (!result.isConfirmed) return; 
-      $.ajax({ url: BASE_URL + 'api/ventas.php?tipo=facturar', type: 'POST', contentType: 'application/json', data: JSON.stringify(result.value), dataType: 'json' })
-      .done((response) => { 
-        log('Facturación response:', response);
-        Toast.fire({ icon: response.estatus ? 'success' : 'error', title: response.mensaje }); 
-        if (response.estatus && tabla) tabla.ajax.reload(null, false); }); });
-  }, 'json');
-}
 
 function editarVenta(id_venta) {
   $.get(BASE_URL + 'api/ventas.php?tipo=detalle&id=' + id_venta, function (resp) {
@@ -293,7 +268,6 @@ function editarVenta(id_venta) {
 }
 window.verDetalleVenta = (id) => verDetalleVenta(id);
 window.cancelarVenta = (id, folio) => cancelarVenta(id, folio);
-window.facturarVenta = (id) => facturarVenta(id);
 window.editarVenta = (id) => editarVenta(id);
 window.facturarVenta = (id) => abrirFormularioFactura(id, () => tabla && tabla.ajax.reload(null, false));
 window.accionesFacturaVenta = (id) => {
@@ -317,9 +291,29 @@ $(document).ready(function () {
     { data: 'saldo_pendiente', title: 'Saldo', render: (d, type, row) => row.tipo_venta === 'credito' ? `<strong class="${parseFloat(d) > 0 ? 'text-danger' : 'text-success'}">$${parseFloat(d || 0).toFixed(2)}</strong>` : '—' },
     { data: 'cajero', title: 'Atendió', render: (d) => d || 'Admin' },
     { data: 'total', title: 'Total', render: (d) => `<strong>$${parseFloat(d || 0).toFixed(2)}</strong>` },
-    { data: 'estatus_factura', title: 'Factura', render: (d, type, row) => d === 'Facturada'
-      ? `<button class="btn btn-success btn-sm" onclick="accionesFacturaVenta(${Number(row.id)})" title="Descargar o enviar factura"><i class="fa-solid fa-file-invoice me-1"></i>Factura</button>`
-      : d === 'En proceso' ? '<span class="badge bg-warning text-dark">En proceso</span>' : '<span class="badge bg-secondary">Pendiente</span>' },
+    { 
+      data: 'estatus_factura', 
+      title: 'Factura', 
+      render: (d, type, row) => {
+        switch (d) {
+          case 'Facturada':
+            return `<button class="btn btn-success btn-sm" onclick="accionesFacturaVenta(${Number(row.id)})" title="Descargar o enviar factura">
+            <i class="fa-solid fa-file-invoice me-1"></i>Factura</button>`;
+          
+          case 'En proceso':
+            return '<span class="badge bg-warning text-dark">En proceso</span>';
+          
+          case 'Cancelada':
+            return '<span class="badge bg-danger">Cancelada</span>';
+          
+          case 'Cancelacion pendiente':
+            return '<span class="badge bg-info text-dark">Cancelación pendiente</span>';
+          
+          default:
+            return '<span class="badge bg-secondary">Pendiente</span>';
+        }
+      } 
+    },
     {
       data: null,
       title: 'Estatus',

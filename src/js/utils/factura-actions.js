@@ -25,6 +25,86 @@ async function descargarArchivo(idVenta, formato) {
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+async function cancelarFactura(idVenta) {
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+  const { isConfirmed, value } = await Swal.fire({
+    icon: 'warning',
+    title: 'Cancelar factura',
+    html: `
+      <p style="margin-bottom:12px">Se cancelará la factura ante el SAT. El ticket seguirá activo.</p>
+      <select id="swal-motivo" class="swal2-select" style="width:100%;margin:0 0 12px">
+        <option value="">Selecciona el motivo…</option>
+        <option value="01">01 - Emitida con errores, con relación (hay factura sustituta)</option>
+        <option value="02">02 - Emitida con errores, sin relación</option>
+        <option value="03">03 - No se llevó a cabo la operación</option>
+      </select>
+      <input id="swal-uuid" class="swal2-input" style="display:none;width:100%;margin:0"
+             placeholder="UUID de la factura sustituta" maxlength="36" autocomplete="off">
+    `,
+    focusConfirm: false,
+    showCancelButton: true,
+    confirmButtonText: 'Cancelar factura',
+    cancelButtonText: 'Mejor no',
+    confirmButtonColor: '#d33',
+    showLoaderOnConfirm: true,
+    allowOutsideClick: () => !Swal.isLoading(),
+    didOpen: () => {
+      const popup = Swal.getPopup();
+      const motivo = popup.querySelector('#swal-motivo');
+      const uuid = popup.querySelector('#swal-uuid');
+      motivo.addEventListener('change', () => {
+        uuid.style.display = motivo.value === '01' ? 'flex' : 'none';
+        if (motivo.value !== '01') uuid.value = '';
+      });
+    },
+    preConfirm: async () => {
+      const popup = Swal.getPopup();
+      const motivo = popup.querySelector('#swal-motivo').value;
+      const uuid = popup.querySelector('#swal-uuid').value.trim().toLowerCase();
+
+      if (!['01', '02', '03'].includes(motivo)) {
+        Swal.showValidationMessage('Selecciona el motivo de cancelación');
+        return false;
+      }
+      if (motivo === '01' && !UUID_RE.test(uuid)) {
+        Swal.showValidationMessage('Captura un UUID válido de la factura sustituta');
+        return false;
+      }
+
+      try {
+        const response = await fetch(`${BASE_URL}api/ventas.php?tipo=cancelar_factura`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8' },
+          body: new URLSearchParams({
+            id: String(idVenta),
+            motivo,
+            uuid_sustituto: motivo === '01' ? uuid : ''
+          })
+        });
+        const result = await response.json();
+        if (!response.ok || !result.estatus) {
+          throw new Error(result.mensaje || 'No se pudo cancelar la factura');
+        }
+        return result;
+      } catch (error) {
+        Swal.showValidationMessage(error.message);
+        return false;
+      }
+    }
+  });
+
+  if (!isConfirmed || !value) return;
+
+  const pendiente = value.sat_status === 'pending';
+  await Swal.fire({
+    icon: pendiente ? 'info' : 'success',
+    title: pendiente ? 'Cancelación en proceso' : 'Factura cancelada',
+    text: value.mensaje
+  });
+  // aquí refresca tu tabla/vista
+}
+
 async function enviarCorreo(idVenta) {
 
    let correo = document.getElementById('factura-correo-input').value.trim();
@@ -134,6 +214,9 @@ html: `
     <button type="button" class="btn btn-outline-success mt-1" id="accion-enviar-factura">
       <i class="fa-solid fa-paper-plane me-2"></i>Enviar factura por correo
     </button>
+     <button type="button" class="btn btn-outline-danger mt-1" id="accion-cancelar-factura">
+      <i class="fa-solid fa-cancel me-2"></i>Cancelar Factura
+    </button>
   </div>
 `,
 
@@ -151,6 +234,13 @@ html: `
       document.getElementById('accion-descargar-xml').addEventListener('click', async () => {
         try {
           await descargarArchivo(idVenta, 'xml');
+        } catch (error) {
+          document.getElementById('factura-acciones-error').textContent = error.message;
+        }
+      });
+       document.getElementById('accion-cancelar-factura').addEventListener('click', async () => {
+        try {
+          await cancelarFactura(idVenta);
         } catch (error) {
           document.getElementById('factura-acciones-error').textContent = error.message;
         }

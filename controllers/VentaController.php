@@ -76,4 +76,9 @@ class VentaController extends DataTableController {
     public function enviarFacturaPorCorreo(int $id_venta, string $correo, string $asunto, string $comentarios): array {
         return $this->model->enviarFacturaPorCorreo($id_venta, $correo, $asunto, $comentarios);
     }
+
+    public function cancelarFactura(int $id_venta, string $motivo, string $uuidSustituto = ''): array
+{
+    return $this->model->cancelarFactura($id_venta, $motivo, $uuidSustituto);
+}
 }

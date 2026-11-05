@@ -64,6 +64,14 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
         <td class="text-end">$${Number(item.importe).toFixed(2)}</td>
       </tr>`).join('');
 
+
+      const venta = detail.data.venta || {};
+      const esCredito = venta.tipo_venta === 'credito' || Number(venta.saldo_pendiente || 0) > 0;
+      
+      // Regla fiscal: Si es crédito, por defecto es PPD y forma de pago 99. Si es contado, PUE.
+      const metodoSugerido = esCredito ? 'PPD' : 'PUE';
+      const formaSugerida = esCredito ? '99' : (venta.forma_pago || '01'); // '01' Efectivo por defecto si no hay otra
+
       Swal.fire({
         title: `Facturar recibo ${escapeHtml(detail.data.venta.folio)}`, width: '900px',
         html: `<div class="text-start">
@@ -82,8 +90,8 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
           </div>
           <div class="row">
             <div class="col-md-6 mb-3"><label class="form-label">Correo (opcional)</label><input id="fac_correo" type="email" class="form-control"></div>
-            <div class="col-md-3 mb-3"><label class="form-label">Método de pago *</label><select id="fac_metodo" class="selectpicker w-100" data-live-search="true">${opcionesSAT(metodosPago, 'PUE')}</select></div>
-            <div class="col-md-3 mb-3"><label class="form-label">Forma de pago *</label><select id="fac_forma" class="selectpicker w-100" data-live-search="true">${opcionesSAT(formasPago, '01')}</select></div>
+            <div class="col-md-3 mb-3"><label class="form-label">Método de pago *</label><select id="fac_metodo" class="selectpicker w-100" data-live-search="true">${opcionesSAT(metodosPago, metodoSugerido)}</select></div>
+            <div class="col-md-3 mb-3"><label class="form-label">Forma de pago *</label><select id="fac_forma" class="selectpicker w-100" data-live-search="true">${opcionesSAT(formasPago, formaSugerida)}</select></div>
           </div>
           <h6 class="mt-2">Partidas</h6>
           <div class="table-responsive" style="max-height:220px"><table class="table table-sm table-striped"><thead><tr><th>Producto</th><th class="text-end">Cantidad</th><th class="text-end">Precio unitario</th><th class="text-end">Importe</th></tr></thead><tbody>${partidas}</tbody></table></div>
@@ -114,6 +122,14 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
             $('#fac_impuesto').text(`$${amounts.iva.toFixed(2)}`);
             $('#fac_total').text(`$${amounts.total.toFixed(2)}`);
           };
+
+          // Automatizar comportamiento según el método de pago seleccionado
+          $('#fac_metodo').on('change', function() {
+            if ($(this).val() === 'PPD') {
+              $('#fac_forma').selectpicker('val', '99'); // PPD exige forma de pago 99
+            }
+          });
+
           $('#fac_iva').on('change', recalcular);
           $('#fac_cliente').on('change', function () {
             const cliente = clientes.find((item) => String(item.id) === String(this.value));
@@ -129,8 +145,38 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
         },
         preConfirm: () => {
           const issuerId = selectedIssuerId ?? Number($('#fac_emisor').val());
-          if (!issuerId) { Swal.showValidationMessage('Selecciona un emisor para continuar.'); return false; }
-          return { id: idVenta, issuer_id: issuerId, rfc: $('#fac_rfc').val().trim().toUpperCase(), razon_social: $('#fac_razon').val().trim(), codigo_postal: $('#fac_cp').val().trim(), regimen_fiscal: $('#fac_regimen').val().trim(), uso_cfdi: $('#fac_uso').val().trim(), correo: $('#fac_correo').val().trim(), metodo_pago: $('#fac_metodo').val(), forma_pago: $('#fac_forma').val().trim(), tasa_iva: $('#fac_iva').val() };
+          if (!issuerId) { 
+            Swal.showValidationMessage('Selecciona un emisor para continuar.'); 
+            return false; 
+          }
+
+          const metodoPago = $('#fac_metodo').val();
+          const formaPago = $('#fac_forma').val();
+
+          // Validaciones SAT obligatorias
+          if (metodoPago === 'PPD' && formaPago !== '99') {
+            Swal.showValidationMessage('Las ventas con método PPD deben tener obligatoriamente la forma de pago "99 - Por definir".');
+            return false;
+          }
+
+          if (metodoPago === 'PUE' && formaPago === '99') {
+            Swal.showValidationMessage('El método PUE no permite la forma de pago "99 - Por definir". Selecciona una forma válida (Efectivo, Tarjeta, etc.).');
+            return false;
+          }
+
+          return { 
+            id: idVenta, 
+            issuer_id: issuerId, 
+            rfc: $('#fac_rfc').val().trim().toUpperCase(), 
+            razon_social: $('#fac_razon').val().trim(), 
+            codigo_postal: $('#fac_cp').val().trim(), 
+            regimen_fiscal: $('#fac_regimen').val().trim(), 
+            uso_cfdi: $('#fac_uso').val().trim(), 
+            correo: $('#fac_correo').val().trim(), 
+            metodo_pago: metodoPago, 
+            forma_pago: formaPago, 
+            tasa_iva: $('#fac_iva').val() 
+          };
         }
       }).then((result) => {
         if (!result.isConfirmed) return;

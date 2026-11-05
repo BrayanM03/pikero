@@ -350,7 +350,7 @@ class Venta extends Datatable
      * Columnas que ya no se usan: factura_payload, factura_delivery_payload.
      */
 
-    public function facturar(int $id_venta, array $data): array
+   public function facturar(int $id_venta, array $data): array
     {
         $ventaRows = $this->db->select(
             'SELECT id, folio, total, id_forma_pago, estatus, estatus_factura, factura_date, factura_issuer_id
@@ -385,11 +385,11 @@ class Venta extends Datatable
         }
 
         // 2) Validaciones del formulario (siempre, con los datos actuales)
-        $rfc            = strtoupper(trim((string)($data['rfc'] ?? '')));
-        $razon_social   = trim((string)($data['razon_social'] ?? ''));
-        $codigo_postal  = trim((string)($data['codigo_postal'] ?? ''));
-        $regimen_fiscal = trim((string)($data['regimen_fiscal'] ?? ''));
-        $uso_cfdi       = trim((string)($data['uso_cfdi'] ?? ''));
+        $rfc             = strtoupper(trim((string)($data['rfc'] ?? '')));
+        $razon_social    = trim((string)($data['razon_social'] ?? ''));
+        $codigo_postal   = trim((string)($data['codigo_postal'] ?? ''));
+        $regimen_fiscal  = trim((string)($data['regimen_fiscal'] ?? ''));
+        $uso_cfdi        = trim((string)($data['uso_cfdi'] ?? ''));
         if (!preg_match('/^[A-ZÑ&]{3,4}[0-9]{6}[A-Z0-9]{3}$/', $rfc)) {
             return ['estatus' => false, 'mensaje' => 'El RFC no tiene un formato válido'];
         }
@@ -399,11 +399,6 @@ class Venta extends Datatable
         if ($correo !== '' && !filter_var($correo, FILTER_VALIDATE_EMAIL)) {
             return ['estatus' => false, 'mensaje' => 'El correo no tiene un formato válido'];
         }
-        $rateInput = (string)($data['tasa_iva'] ?? '0.16');
-        if (!in_array($rateInput, ['0', '0.08', '0.16'], true)) {
-            return ['estatus' => false, 'mensaje' => 'La tasa de IVA seleccionada no es válida'];
-        }
-        $taxRate = (float)$rateInput;
 
         // 3) Emisor: si hay intento previo se conserva el mismo; si no, el del formulario
         $issuersResponse = $client->emisores($clientId);
@@ -416,11 +411,13 @@ class Venta extends Datatable
         $issuer   = $issuerResponse['data'];
         $issuerId = (int)$issuer['issuer_id'];
 
-        // 4) Conceptos
+        // 4) Conceptos (Se usa dv.precio que es el precio real cobrado en la venta)
         $items = $this->db->select(
-            'SELECT p.nombre, p.codigo, p.clave_sat, p.codigo_unidad_sat, p.objeto_impuesto, dv.cantidad, dv.precio, dv.importe, u.abreviatura AS unidad
+            'SELECT p.nombre, p.codigo, p.clave_sat, p.codigo_unidad_sat, 
+                    p.precio_venta_incluye_iva, p.tipo_iva_venta, 
+                    dv.cantidad, dv.precio, dv.importe, u.abreviatura AS unidad
          FROM detalle_ventas dv
-         INNER JOIN productos p ON p.id = dv.id_producto AND p.id_ferreteria = ?
+         LEFT JOIN productos p ON p.id = dv.id_producto AND p.id_ferreteria = ?
          LEFT JOIN unidades u ON u.id = p.id_unidad
          WHERE dv.id_venta = ?',
             [$this->id_ferreteria, $id_venta]
@@ -430,55 +427,135 @@ class Venta extends Datatable
         $cfdiItems = [];
         foreach ($items as $item) {
             $quantity = (float)$item['cantidad'];
-            if ($quantity <= 0) continue;
-            $taxObject = (string)($item['objeto_impuesto'] ?: '02');
-            if (!in_array($taxObject, ['01', '02', '03'], true)) $taxObject = '02';
-            $grossUnitPrice = (float)$item['precio'];
-            $taxable   = $taxObject === '02';
-            $totalItem = round((float)$item['importe'], 2);
-            if ($taxable && $taxRate > 0) {
-                // 1. Obtener precio unitario sin IVA y subtotal
-                $unitPrice = round($grossUnitPrice / (1 + $taxRate), 6);
-                $subtotal  = round($unitPrice * $quantity, 2);
+            if ($quantity <= 0) {
+                return ['estatus' => false, 'mensaje' => 'Uno de los artículos de la venta tiene una cantidad inválida.'];
+            }
 
-                // 2. El IVA es la diferencia exacta para forzar el cuadre con $totalItem
-                $iva = round($totalItem - $subtotal, 2);
+            // --- TRATAMIENTO FISCAL SEGÚN TIPO DE IVA ---
+            $tipoIvaVenta = strtolower(
+                trim((string)($item['tipo_iva_venta'] ?? ''))
+            );
+
+            $taxObject = '02';
+            $taxRate = 0.0000;
+            $tipoFactor = 'Tasa';
+
+            if ($tipoIvaVenta === 'exento') {
+
+                $taxObject = '02';
+                $tipoFactor = 'Exento';
+
+            } elseif ($tipoIvaVenta === 'no_objeto') {
+
+                $taxObject = '01';
+                $tipoFactor = null;
+
+            } elseif (is_numeric($tipoIvaVenta)) {
+
+                $rate = (float)$tipoIvaVenta;
+
+                if (abs($rate - 0.00) < 0.0000001) {
+                    $taxRate = 0.0000;
+
+                } elseif (abs($rate - 0.08) < 0.0000001) {
+                    $taxRate = 0.0800;
+
+                } elseif (abs($rate - 0.16) < 0.0000001) {
+                    $taxRate = 0.1600;
+
+                } else {
+                    return [
+                        'estatus' => false,
+                        'mensaje' => 'El artículo tiene una tasa de IVA no soportada.'
+                    ];
+                }
+
+            } else {
+
+                return [
+                    'estatus' => false,
+                    'mensaje' => 'El tratamiento fiscal de uno de los artículos no es válido.'
+                ];
+            }
+
+            // --- CÁLCULO DE PRECIOS E IMPORTES (Precio real de la venta) ---
+            $grossUnitPrice = (float)$item['precio']; 
+            $precioIncluyeIva = (int)($item['precio_venta_incluye_iva'] ?? 1) === 1;
+
+            if ($precioIncluyeIva && $tipoFactor === 'Tasa' && $taxRate > 0) {
+                $unitPrice = round($grossUnitPrice / (1 + $taxRate), 6);
             } else {
                 $unitPrice = $grossUnitPrice;
-                $subtotal  = $totalItem;
-                $iva       = 0.00;
             }
-            /*  if ($taxable && $taxRate > 0) {
-            $expectedTotal = round($grossUnitPrice * $quantity, 2);
-            if (abs($totalItem - $expectedTotal) > 0.01) {
-                return ['estatus' => false, 'mensaje' => 'El importe de un artículo no coincide con la cantidad y precio unitario.'];
+
+            $subtotal = round($unitPrice * $quantity, 2);
+
+            // --- CONSTRUCCIÓN DE IMPUESTOS PARA FACTURAMA V4 ---
+            $taxes = [];
+            $ivaCalculado = 0.00;
+
+            if ($taxObject === '02') {
+                if ($tipoFactor === 'Exento') {
+                    $taxes[] = [
+                        'Name'        => 'IVA Exento',
+                        'Base'        => $subtotal,
+                        'IsRetention' => false
+                    ];
+                } else {
+                    $ivaCalculado = round($subtotal * $taxRate, 2);
+                    $taxes[] = [
+                        'Name'        => 'IVA',
+                        'Base'        => $subtotal,
+                        'Rate'        => $taxRate,
+                        'Total'       => $ivaCalculado,
+                        'IsRetention' => false,
+                        'IsQuota'     => false
+                    ];
+                }
             }
-        }
-        $unitPrice = round($taxable && $taxRate > 0 ? $grossUnitPrice / (1 + $taxRate) : $grossUnitPrice, 6);
-        $subtotal  = round($unitPrice * $quantity, 2); */
+
+            $totalItem = round($subtotal + $ivaCalculado, 2);
+
+            $importeVenta = round((float)$item['importe'], 2);
+
+            if (abs($totalItem - $importeVenta) > 0.01) {
+                return [
+                    'estatus' => false,
+                    'mensaje' => 'El importe calculado del artículo no coincide con el importe registrado en la venta.'
+                ];
+            }
+
+            $claveSat = trim((string)$item['clave_sat']);
+            $unidadSat = trim((string)$item['codigo_unidad_sat']);
+
+            if ($claveSat === '' || $unidadSat === '') {
+                return [
+                    'estatus' => false,
+                    'mensaje' => 'Un artículo no tiene configurada su clave de producto o unidad SAT.'
+                ];
+            }
+
+            // Estructura compatible con Facturama API V4
             $cfdiItem = [
-                'ProductCode'          => trim((string)$item['clave_sat']) ?: '01010101',
+                'ProductCode'          => $claveSat,
                 'IdentificationNumber' => (string)($item['codigo'] ?? ''),
                 'Description'          => (string)$item['nombre'],
                 'Unit'                 => (string)($item['unidad'] ?: 'Pieza'),
-                'UnitCode'             => trim((string)$item['codigo_unidad_sat']) ?: 'H87',
+                'UnitCode'             => $unidadSat,
                 'Quantity'             => $quantity,
                 'UnitPrice'            => $unitPrice,
                 'Subtotal'             => $subtotal,
                 'TaxObject'            => $taxObject,
                 'Total'                => $totalItem
             ];
-            if ($taxable) {
-                $cfdiItem['Taxes'] = [[
-                    'Name' => 'IVA',
-                    'Rate' => $taxRate,
-                    'Total' => $iva,
-                    'Base' => $subtotal,
-                    'IsRetention' => false
-                ]];
+
+            if (!empty($taxes)) {
+                $cfdiItem['Taxes'] = $taxes;
             }
+
             $cfdiItems[] = $cfdiItem;
         }
+
         if (empty($cfdiItems)) return ['estatus' => false, 'mensaje' => 'La venta no tiene artículos válidos para facturar.'];
 
         // 5) Date: reutiliza la guardada si hay intento previo; si no, genera una nueva
@@ -504,60 +581,139 @@ class Venta extends Datatable
             return ['estatus' => false, 'mensaje' => 'Configura un código postal fiscal de cinco dígitos para el emisor antes de facturar.'];
         }
 
-        $paymentForm   = trim((string)($data['forma_pago'] ?? '')) ?: '01';
-        $paymentMethod = trim((string)($data['metodo_pago'] ?? 'PUE')) ?: 'PUE';
+     // 1. Recibir los valores sin forzar un valor por defecto arbitrario ('PUE' o '01')
+        $paymentForm   = trim((string)($data['forma_pago'] ?? ''));
+        $paymentMethod = trim((string)($data['metodo_pago'] ?? ''));
+        $exportation   = trim((string)($data['exportacion'] ?? '')) ?: '01';
+
+        // 2. Validar que obligatoriamente se hayan enviado
+        if ($paymentMethod === '') {
+            return ['estatus' => false, 'mensaje' => 'Debes seleccionar un método de pago válido.'];
+        }
+
+        if ($paymentForm === '') {
+            return ['estatus' => false, 'mensaje' => 'Debes seleccionar una forma de pago válida.'];
+        }
+
+        // 3. Validaciones de consistencia fiscal (Reglas SAT)
+        if ($paymentMethod === 'PPD' && $paymentForm !== '99') {
+            return [
+                'estatus' => false, 
+                'mensaje' => 'Las facturas con método PPD deben utilizar obligatoriamente la forma de pago 99 (Por definir).'
+            ];
+        }
+
+        if ($paymentMethod === 'PUE' && $paymentForm === '99') {
+            return [
+                'estatus' => false, 
+                'mensaje' => 'El método de pago PUE no puede utilizar la forma de pago 99 (Por definir).'
+            ];
+        }
+
+        // 4. Estructurar el receptor para el timbrado
         $receiver = [
-            'Rfc' => $rfc,
-            'Name' => $razon_social,
-            'CfdiUse' => $uso_cfdi,
+            'Rfc'          => $rfc,
+            'Name'         => $razon_social,
+            'CfdiUse'      => $uso_cfdi,
             'FiscalRegime' => $regimen_fiscal,
-            'TaxZipCode' => $codigo_postal
+            'TaxZipCode'   => $codigo_postal
+        ];
+        
+        if ($correo !== '') {
+            $receiver['Email'] = $correo;
+        }
+
+        // 3. Estructurar el receptor para el timbrado
+        $receiver = [
+            'Rfc'          => $rfc,
+            'Name'         => $razon_social,
+            'CfdiUse'      => $uso_cfdi,
+            'FiscalRegime' => $regimen_fiscal,
+            'TaxZipCode'   => $codigo_postal
+        ];
+        
+        if ($correo !== '') {
+            $receiver['Email'] = $correo;
+        }
+
+
+        $receiver = [
+            'Rfc'          => $rfc,
+            'Name'         => $razon_social,
+            'CfdiUse'      => $uso_cfdi,
+            'FiscalRegime' => $regimen_fiscal,
+            'TaxZipCode'   => $codigo_postal
         ];
         if ($correo !== '') $receiver['Email'] = $correo;
 
         $cfdiPayload = [
-            'CfdiType'      => 'I',
-            'Folio'         => $folio,          // clave de idempotencia
-            'Date'          => $invoiceDate,    // clave de idempotencia
-            'Currency'      => 'MXN',
-            'PaymentForm'   => $paymentForm,
+            'CfdiType'        => 'I',
+            'Folio'           => $folio,          // clave de idempotencia
+            'Date'            => $invoiceDate,    // clave de idempotencia
+            'Currency'        => 'MXN',
+            'PaymentForm'     => $paymentForm,
             'ExpeditionPlace' => $issuerPostalCode,
-            'PaymentMethod' => $paymentMethod,
-            'Receiver'      => $receiver,
-            'Items'         => $cfdiItems
+            'PaymentMethod'   => $paymentMethod,
+            'Receiver'        => $receiver,
+            'Items'           => $cfdiItems,
+            'Exportation' => $exportation,
         ];
         $deliveryOptions = $this->opcionesEntrega($correo, $ferreteriaInfo);
 
-        // 6) Marcar "En proceso" y guardar SOLO identidad (+ datos fiscales para mostrar/editar)
+        // 6) Marcar "En proceso" y guardar identidad
+       // 6) Marcar "En proceso" y guardar identidad con control de concurrencia real
         $this->db->beginTransaction();
         try {
             $locked = $this->db->select(
-                'SELECT estatus, estatus_factura, factura_date, factura_issuer_id
+                'SELECT estatus, estatus_factura, factura_date, factura_intent_at, factura_issuer_id
              FROM ventas WHERE id = ? AND id_ferreteria = ? AND id_sucursal = ? FOR UPDATE',
                 [$id_venta, $this->id_ferreteria, $this->id_sucursal]
             );
-            if (empty($locked) || (int)$locked[0]['estatus'] === 0 || $locked[0]['estatus_factura'] === 'Facturada') {
+            
+            if (empty($locked) || (int)$locked[0]['estatus'] === 0) {
                 $this->db->rollBack();
-                return ['estatus' => false, 'mensaje' => 'La venta ya no está disponible para facturar'];
+                return ['estatus' => false, 'mensaje' => 'La venta no está disponible para facturar'];
             }
-            // Otra petición ya fijó Date/emisor: respétalos para no romper la idempotencia
+
+            if ($locked[0]['estatus_factura'] === 'Facturada') {
+                $this->db->rollBack();
+                return ['estatus' => false, 'mensaje' => 'Este recibo ya está facturado'];
+            }
+
+            // CONTROL DE CONCURRENCIA ACTIVA:
+            if ($locked[0]['estatus_factura'] === 'En proceso' && !empty($locked[0]['factura_intent_at'])) {
+                $tiempoTranscurrido = time() - strtotime($locked[0]['factura_intent_at']);
+                
+                // Si el intento anterior ocurrió hace menos de 45 segundos, hay otra petición activa procesándolo
+                if ($tiempoTranscurrido < 120) {
+                    $this->db->rollBack();
+                    return ['estatus' => false, 'mensaje' => 'La factura ya se está procesando en este momento. Por favor espera unos segundos.'];
+                }
+            }
+
+            // Si es un intento previo antiguo (timeout / 5xx real), respetamos su fecha original de idempotencia
             if ($locked[0]['estatus_factura'] === 'En proceso' && !empty($locked[0]['factura_date'])) {
                 $invoiceDate = (string)$locked[0]['factura_date'];
                 $cfdiPayload['Date'] = $invoiceDate;
             }
+
+            $nowTimestamp = date('Y-m-d H:i:s');
+
             $this->db->update('ventas', [
-                'estatus_factura'       => 'En proceso',
-                'factura_issuer_id'     => $issuerId,
-                'factura_date'          => $invoiceDate,
-                'factura_rfc'           => $rfc,
-                'factura_razon_social'  => $razon_social,
-                'factura_codigo_postal' => $codigo_postal,
+                'estatus_factura'        => 'En proceso',
+                'factura_issuer_id'      => $issuerId,
+                'factura_date'           => $invoiceDate,
+                'factura_intent_at'      => $nowTimestamp, // <- Registramos el timestamp exacto del intento
+                'factura_rfc'            => $rfc,
+                'factura_razon_social'   => $razon_social,
+                'factura_codigo_postal'  => $codigo_postal,
                 'factura_regimen_fiscal' => $regimen_fiscal,
-                'factura_uso_cfdi'      => $uso_cfdi,
-                'factura_correo'        => $correo,
-                'factura_metodo_pago'   => $paymentMethod,
-                'factura_forma_pago'    => $paymentForm
-            ], 'id = ? AND id_ferreteria = ?', [$id_venta, $this->id_ferreteria]);
+                'factura_uso_cfdi'       => $uso_cfdi,
+                'factura_correo'         => $correo,
+                'factura_metodo_pago'    => $paymentMethod,
+                'factura_forma_pago'     => $paymentForm
+            ], 'id = ? AND id_ferreteria = ?', [$id_venta, $this->id_ferreteria ?? $this->id_ferreteria]); // Mantén tu condición de id_ferreteria
+            
             $this->db->commit();
         } catch (Throwable $exception) {
             $this->db->rollBack();
@@ -569,8 +725,6 @@ class Venta extends Datatable
 
         if (!$response['estatus']) {
             $httpCode = (int)($response['http_code'] ?? 0);
-            // 4xx (excepto 408/429): rechazo definitivo, no se timbró nada.
-            // Se limpia el intento para que el reenvío corregido genere un Date nuevo.
             if ($httpCode >= 400 && $httpCode < 500 && !in_array($httpCode, [408, 429], true)) {
                 $this->db->update('ventas', [
                     'estatus_factura'   => 'Pendiente',
@@ -579,8 +733,6 @@ class Venta extends Datatable
                 ], 'id = ? AND id_ferreteria = ? AND estatus_factura = ?', [$id_venta, $this->id_ferreteria, 'En proceso']);
                 return $response;
             }
-            // Timeout / 5xx / 408 / 429: resultado incierto. Se queda "En proceso";
-            // el siguiente intento consultará por Folio antes de reenviar.
             $response['mensaje'] = 'No se pudo confirmar la emisión. Vuelve a intentar: se verificará antes de reenviar.';
             return $response;
         }
@@ -673,6 +825,79 @@ class Venta extends Datatable
         );
     }
 
+     public function cancelarFactura(int $id_venta, string $motivo, string $uuidSustituto = ''): array
+{
+    if ($id_venta <= 0) {
+        return ['estatus' => false, 'mensaje' => 'Venta inválida'];
+    }
+    if (!in_array($motivo, ['01', '02', '03'], true)) {
+        return ['estatus' => false, 'mensaje' => 'Motivo de cancelación inválido'];
+    }
+    if ($motivo === '01') {
+        if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $uuidSustituto)) {
+            return ['estatus' => false, 'mensaje' => 'El motivo 01 requiere el UUID válido de la factura sustituta'];
+        }
+    } else {
+        $uuidSustituto = ''; // Facturama puede fallar si lo mandas cuando no aplica
+    }
+
+    $rows = $this->db->select(
+        "SELECT factura_id, factura_issuer_id, estatus_factura
+         FROM ventas WHERE id = ? AND id_ferreteria = ? AND id_sucursal = ?",
+        [$id_venta, $this->id_ferreteria, $this->id_sucursal]
+    );
+    if (empty($rows)) {
+        return ['estatus' => false, 'mensaje' => 'Venta no encontrada'];
+    }
+    $venta = $rows[0];
+
+    if ($venta['estatus_factura'] === 'Cancelada') {
+        return ['estatus' => false, 'mensaje' => 'La factura ya está cancelada'];
+    }
+    if ($venta['estatus_factura'] === 'Cancelación pendiente') {
+        return ['estatus' => false, 'mensaje' => 'La cancelación ya fue solicitada y espera respuesta del receptor'];
+    }
+    if ($venta['estatus_factura'] !== 'Facturada') {
+        return ['estatus' => false, 'mensaje' => 'La venta todavía no tiene una factura emitida'];
+    }
+    if (empty($venta['factura_id']) || (int)($venta['factura_issuer_id'] ?? 0) <= 0) {
+        return ['estatus' => false, 'mensaje' => 'La factura no tiene un identificador/emisor válido'];
+    }
+
+    $resp = (new FacturamaClient())->cancelarCfdi(
+        (string)$this->id_ferreteria,
+        (int)$venta['factura_issuer_id'],
+        (string)$venta['factura_id'],
+        $motivo,
+        $uuidSustituto
+    );
+    if (!$resp['estatus']) {
+        return $resp;
+    }
+
+    if($resp['sat_status'] === 'active'){
+        return ['estatus' => false, 'mensaje' => 'No se puede cancelar, tiene documentos relacionados', 'resp' => $resp];  
+        }else if($resp['sat_status'] === 'pending'){
+        $nuevoEstatus = 'Cancelacion pendiente';
+    }else if($resp['sat_status'] == 'canceled'){
+        $nuevoEstatus = 'Cancelada';
+    }else{
+        return ['estatus' => false, 'mensaje' => 'La factura no pudo cancelarse', 'resp' => $resp];
+    };
+
+    // Ajusta al método de tu wrapper ($this->db->execute / update / etc.)
+    $this->db->query(
+        "UPDATE ventas
+         SET estatus_factura = ?, factura_cancelacion_motivo = ?,
+             factura_cancelacion_uuid_sustituto = ?, factura_cancelacion_fecha = NOW()
+         WHERE id = ? AND id_ferreteria = ? AND id_sucursal = ? AND estatus_factura = 'Facturada'",
+        [$nuevoEstatus, $motivo, $uuidSustituto ?: null, $id_venta, $this->id_ferreteria, $this->id_sucursal]
+    );
+
+    return $resp;
+}
+
+
     public function enviarFacturaPorCorreo(int $id_venta, string $correo, string $asunto, string $comentarios): array
     {
         $rows = $this->db->select(
@@ -714,6 +939,7 @@ class Venta extends Datatable
         }
 
         $venta = $det['data']['venta'];
+
         if ((int)$venta['estatus'] === 0) {
             return ['estatus' => false, 'mensaje' => 'Esta venta ya se encuentra cancelada'];
         }
@@ -725,6 +951,42 @@ class Venta extends Datatable
                 return ['estatus' => false, 'mensaje' => 'No se puede cancelar una nota a crédito con abonos; registra primero la devolución del dinero'];
             }
         }
+
+        // 1) Antes de cancelar: ¿La venta esta facturada?
+        $estatusFactura = $venta['estatus_factura'] ?? 'Pendiente';
+
+// Ya facturada: bloquear
+if ($estatusFactura === 'Facturada') {
+    return ['estatus' => false, 'mensaje' => 'Cancela primero la factura antes de cancelar la venta'];
+}
+
+// Intento de timbrado con resultado incierto: verificar en Facturama
+if ($estatusFactura === 'En proceso') {
+    $issuerId = (int)($venta['factura_issuer_id'] ?? 0);
+    if ($issuerId < 1) {
+        return ['estatus' => false, 'mensaje' => 'No se puede verificar el estado de la factura; contacta a soporte.'];
+    }
+
+    $client = new FacturamaClient();
+    $existente = $client->buscarEmitidaPorFolio(
+        (string)$this->id_ferreteria,
+        $issuerId,
+        (string)$venta['folio'],
+        '',      // sin date
+        true     // quick
+    );
+
+    // Si no se pudo verificar, NO cancelar (fail-closed)
+    if (!$existente['estatus']) {
+        return ['estatus' => false, 'mensaje' => 'No se pudo verificar si la venta tiene factura emitida; intenta de nuevo en unos minutos.'];
+    }
+
+    if (!empty($existente['data'])) {
+        // Opcional: sincronizar tu BD marcándola como Facturada
+        // $this->finalizarFactura($id_venta, $venta['folio'], $existente['data'], '');
+        return ['estatus' => false, 'mensaje' => 'La venta ya tiene una factura emitida; cancela primero la factura.'];
+    }
+}
 
         $items = $det['data']['items'];
         $id_usuario = $_SESSION['id'] ?? null;

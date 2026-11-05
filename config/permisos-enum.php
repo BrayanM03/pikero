@@ -74,4 +74,7 @@ enum CPERMISO: string {
 
     case VER_PERFIL = 'ver_perfil';
     case EDITAR_PERFIL = 'editar_perfil';
+
+    //CFDis
+    case CANCELAR_FACTURAS = 'cancelar_facturas';
 }

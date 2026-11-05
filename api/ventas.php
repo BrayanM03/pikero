@@ -57,6 +57,30 @@ if ($tipo === 'descargar_factura') {
     exit;
 }
 
+if ($tipo === 'cancelar_factura') {
+    require_once __DIR__ . '/../models/Permiso.php';
+    require_once __DIR__ . '/../config/permisos-enum.php';
+    header('Content-Type: application/json; charset=utf-8');
+
+    $permiso = (new Permiso())->verificarPermiso(
+        $_SESSION['id_rol'] ?? 0,
+        $_SESSION['id'] ?? 0,
+        CPERMISO::CANCELAR_FACTURAS->value   // crea este permiso
+    );
+    if (empty($_SESSION['id']) || empty($permiso['estatus'])) {
+        http_response_code(empty($_SESSION['id']) ? 401 : 403);
+        echo json_encode(['estatus' => false, 'mensaje' => 'No tienes permiso para cancelar esta factura']);
+        exit;
+    }
+
+    $id_venta = (int)($_POST['id'] ?? 0);
+    $motivo   = trim((string)($_POST['motivo'] ?? ''));
+    $uuid     = strtolower(trim((string)($_POST['uuid_sustituto'] ?? '')));
+
+    echo json_encode($controller->cancelarFactura($id_venta, $motivo, $uuid), JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 if ($tipo === 'enviar_factura_correo') {
     require_once __DIR__ . '/../models/Permiso.php';
     require_once __DIR__ . '/../config/permisos-enum.php';

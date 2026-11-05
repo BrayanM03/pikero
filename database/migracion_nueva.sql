@@ -70,3 +70,12 @@ WHERE id_forma_pago IS NOT NULL AND monto > 0;
 
 ---Gastos
 ALTER TABLE gastos ADD COLUMN id_forma_pago INT(11) AFTER monto
+
+
+---3 nov 2026 Migracion de canclacion
+ALTER TABLE ventas ADD COLUMN factura_intent_at DATETIME NULL AFTER factura_date;
+
+ALTER TABLE ventas
+  ADD COLUMN factura_cancelacion_motivo CHAR(2) NULL,
+  ADD COLUMN factura_cancelacion_uuid_sustituto CHAR(36) NULL,
+  ADD COLUMN factura_cancelacion_fecha DATETIME NULL;
