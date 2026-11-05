@@ -79,3 +79,22 @@ ALTER TABLE ventas
   ADD COLUMN factura_cancelacion_motivo CHAR(2) NULL,
   ADD COLUMN factura_cancelacion_uuid_sustituto CHAR(36) NULL,
   ADD COLUMN factura_cancelacion_fecha DATETIME NULL;
+
+  -- Ejecutar sobre respaldo primero. No modifica importes históricos.
+ALTER TABLE ventas
+  ADD COLUMN descuento_productos DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER subtotal,
+  ADD COLUMN descuento_general DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER descuento_productos;
+
+ALTER TABLE detalle_ventas
+  MODIFY COLUMN cantidad DECIMAL(12,3) NOT NULL,
+  ADD COLUMN importe_bruto DECIMAL(12,2) NULL AFTER importe,
+  ADD COLUMN descuento_producto DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER importe_bruto,
+  ADD COLUMN descuento_general DECIMAL(12,2) NOT NULL DEFAULT 0.00 AFTER descuento_producto,
+  ADD COLUMN objeto_impuesto CHAR(2) NULL AFTER descuento_general,
+  ADD COLUMN tipo_iva_venta VARCHAR(12) NULL AFTER objeto_impuesto,
+  ADD COLUMN precio_venta_incluye_iva TINYINT(1) NULL AFTER tipo_iva_venta,
+  ADD COLUMN clave_sat VARCHAR(20) NULL AFTER precio_venta_incluye_iva,
+  ADD COLUMN codigo_unidad_sat VARCHAR(10) NULL AFTER clave_sat,
+  ADD COLUMN descripcion_producto VARCHAR(255) NULL AFTER codigo_unidad_sat,
+  ADD COLUMN unidad_producto VARCHAR(60) NULL AFTER descripcion_producto;
+-- Las filas antiguas quedan con snapshots NULL; NO rellenarlos desde productos actuales.
