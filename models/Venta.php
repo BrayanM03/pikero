@@ -107,8 +107,8 @@ class Venta extends Datatable
              LEFT JOIN formas_pago fp ON fp.id = v.id_forma_pago
              LEFT JOIN usuarios u ON u.id = v.id_usuario
              LEFT JOIN sucursales s ON s.id = v.id_sucursal
-             WHERE v.id = ? AND v.id_ferreteria = ?",
-            [$id_venta, $this->id_ferreteria]
+             WHERE v.id = ? AND v.id_ferreteria = ? AND v.id_sucursal = ?",
+            [$id_venta, $this->id_ferreteria, $this->id_sucursal]
         );
 
         if (empty($venta)) {
@@ -116,7 +116,11 @@ class Venta extends Datatable
         }
 
         $items = $this->db->select(
-            "SELECT dv.*, p.nombre AS producto, p.codigo, p.clave_sat, p.codigo_unidad_sat, p.objeto_impuesto, u.abreviatura AS unidad
+            "SELECT dv.*, COALESCE(dv.descripcion_producto, p.nombre) AS producto, p.codigo, COALESCE(dv.clave_sat, p.clave_sat) AS clave_sat, COALESCE(dv.codigo_unidad_sat, p.codigo_unidad_sat) AS codigo_unidad_sat, COALESCE(dv.objeto_impuesto, p.objeto_impuesto) AS objeto_impuesto, COALESCE(dv.unidad_producto, u.abreviatura) AS unidad,
+                    COALESCE(dv.tipo_iva_venta, p.tipo_iva_venta) AS tipo_iva_facturacion,
+                    COALESCE(dv.precio_venta_incluye_iva, p.precio_venta_incluye_iva) AS precio_incluye_iva_facturacion,
+                    COALESCE(dv.objeto_impuesto, p.objeto_impuesto) AS objeto_impuesto_facturacion,
+                    CASE WHEN dv.tipo_iva_venta IS NULL THEN 1 ELSE 0 END AS fiscal_heredado
              FROM detalle_ventas dv
              INNER JOIN productos p ON p.id = dv.id_producto
              LEFT JOIN unidades u ON u.id = p.id_unidad
@@ -181,8 +185,8 @@ class Venta extends Datatable
          LEFT JOIN usuarios u ON u.id = v.id_usuario
          LEFT JOIN sucursales s ON s.id = v.id_sucursal
          LEFT JOIN ferreterias f ON f.id = v.id_ferreteria
-         WHERE v.id = ? AND v.id_ferreteria = ?",
-            [$id_venta, $this->id_ferreteria]
+         WHERE v.id = ? AND v.id_ferreteria = ? AND v.id_sucursal = ?",
+            [$id_venta, $this->id_ferreteria, $this->id_sucursal]
         );
 
         if (empty($venta)) {
@@ -190,7 +194,11 @@ class Venta extends Datatable
         }
 
         $items = $this->db->select(
-            "SELECT dv.*, p.nombre AS producto, p.codigo, p.clave_sat, p.codigo_unidad_sat, p.objeto_impuesto, u.abreviatura AS unidad
+            "SELECT dv.*, COALESCE(dv.descripcion_producto, p.nombre) AS producto, p.codigo, COALESCE(dv.clave_sat, p.clave_sat) AS clave_sat, COALESCE(dv.codigo_unidad_sat, p.codigo_unidad_sat) AS codigo_unidad_sat, COALESCE(dv.objeto_impuesto, p.objeto_impuesto) AS objeto_impuesto, COALESCE(dv.unidad_producto, u.abreviatura) AS unidad,
+                    COALESCE(dv.tipo_iva_venta, p.tipo_iva_venta) AS tipo_iva_facturacion,
+                    COALESCE(dv.precio_venta_incluye_iva, p.precio_venta_incluye_iva) AS precio_incluye_iva_facturacion,
+                    COALESCE(dv.objeto_impuesto, p.objeto_impuesto) AS objeto_impuesto_facturacion,
+                    CASE WHEN dv.tipo_iva_venta IS NULL THEN 1 ELSE 0 END AS fiscal_heredado
          FROM detalle_ventas dv
          INNER JOIN productos p ON p.id = dv.id_producto
          LEFT JOIN unidades u ON u.id = p.id_unidad
@@ -411,152 +419,121 @@ class Venta extends Datatable
         $issuer   = $issuerResponse['data'];
         $issuerId = (int)$issuer['issuer_id'];
 
-        // 4) Conceptos (Se usa dv.precio que es el precio real cobrado en la venta)
+        // 4) Conceptos: snapshots fiscales del ticket, fallback solo para ventas anteriores.
         $items = $this->db->select(
-            'SELECT p.nombre, p.codigo, p.clave_sat, p.codigo_unidad_sat, 
-                    p.precio_venta_incluye_iva, p.tipo_iva_venta, 
-                    dv.cantidad, dv.precio, dv.importe, u.abreviatura AS unidad
-         FROM detalle_ventas dv
-         LEFT JOIN productos p ON p.id = dv.id_producto AND p.id_ferreteria = ?
-         LEFT JOIN unidades u ON u.id = p.id_unidad
-         WHERE dv.id_venta = ?',
+            'SELECT dv.*, p.codigo,
+                    COALESCE(dv.descripcion_producto, p.nombre) AS nombre,
+                    COALESCE(dv.clave_sat, p.clave_sat) AS clave_sat_cfdi,
+                    COALESCE(dv.codigo_unidad_sat, p.codigo_unidad_sat) AS unidad_sat_cfdi,
+                    COALESCE(dv.objeto_impuesto, p.objeto_impuesto) AS objeto_cfdi,
+                    COALESCE(dv.tipo_iva_venta, p.tipo_iva_venta) AS tipo_iva_cfdi,
+                    COALESCE(dv.precio_venta_incluye_iva, p.precio_venta_incluye_iva) AS incluye_iva_cfdi,
+                    COALESCE(dv.unidad_producto, u.abreviatura) AS unidad_cfdi
+             FROM detalle_ventas dv
+             LEFT JOIN productos p ON p.id = dv.id_producto AND p.id_ferreteria = ?
+             LEFT JOIN unidades u ON u.id = p.id_unidad
+             WHERE dv.id_venta = ? ORDER BY dv.id',
             [$this->id_ferreteria, $id_venta]
         );
-        if (empty($items)) return ['estatus' => false, 'mensaje' => 'La venta no tiene artículos válidos para facturar.'];
+        if (!$items) return ['estatus'=>false, 'mensaje'=>'Venta sin conceptos'];
 
         $cfdiItems = [];
+        $sumaTicketC = 0;
+        $sumaFiscalC = 0;
+        $sumaSubtotales = 0.0;
+        $sumaDescuentos = 0.0;
+        $impuestosPorTasa = [];
         foreach ($items as $item) {
             $quantity = (float)$item['cantidad'];
-            if ($quantity <= 0) {
-                return ['estatus' => false, 'mensaje' => 'Uno de los artículos de la venta tiene una cantidad inválida.'];
-            }
-
-            // --- TRATAMIENTO FISCAL SEGÚN TIPO DE IVA ---
-            $tipoIvaVenta = strtolower(
-                trim((string)($item['tipo_iva_venta'] ?? ''))
-            );
-
-            $taxObject = '02';
-            $taxRate = 0.0000;
-            $tipoFactor = 'Tasa';
-
-            if ($tipoIvaVenta === 'exento') {
-
-                $taxObject = '02';
-                $tipoFactor = 'Exento';
-
-            } elseif ($tipoIvaVenta === 'no_objeto') {
-
-                $taxObject = '01';
-                $tipoFactor = null;
-
-            } elseif (is_numeric($tipoIvaVenta)) {
-
-                $rate = (float)$tipoIvaVenta;
-
-                if (abs($rate - 0.00) < 0.0000001) {
-                    $taxRate = 0.0000;
-
-                } elseif (abs($rate - 0.08) < 0.0000001) {
-                    $taxRate = 0.0800;
-
-                } elseif (abs($rate - 0.16) < 0.0000001) {
-                    $taxRate = 0.1600;
-
-                } else {
-                    return [
-                        'estatus' => false,
-                        'mensaje' => 'El artículo tiene una tasa de IVA no soportada.'
-                    ];
-                }
-
+            if ($quantity <= 0) return ['estatus'=>false,'mensaje'=>'Cantidad inválida'];
+            $tipoIva = strtolower(trim((string)$item['tipo_iva_cfdi']));
+            $objeto = (string)$item['objeto_cfdi'];
+            if (!in_array($objeto, ['01','02'], true)) return ['estatus'=>false,'mensaje'=>'ObjetoImp no soportado'];
+            if ($tipoIva === 'no_objeto') {
+                if ($objeto !== '01') return ['estatus'=>false,'mensaje'=>'Impuesto inconsistente'];
+                $factorTipo = 'NoObjeto'; $tasa = 0.0;
+            } elseif ($tipoIva === 'exento') {
+                if ($objeto !== '02') return ['estatus'=>false,'mensaje'=>'Impuesto inconsistente'];
+                $factorTipo = 'Exento'; $tasa = 0.0;
+            } elseif (in_array($tipoIva, ['0','0.08','0.16'], true)) {
+                if ($objeto !== '02') return ['estatus'=>false,'mensaje'=>'Impuesto inconsistente'];
+                $factorTipo = 'Tasa'; $tasa = (float)$tipoIva;
             } else {
+                return ['estatus'=>false,'mensaje'=>'Tasa de IVA inválida'];
+            }
+            $incluyeIva = (int)$item['incluye_iva_cfdi'] === 1;
+            $factor = $factorTipo === 'Tasa' ? 1 + $tasa : 1.0;
+            $precio = (float)$item['precio'];
+            $unitPrice = round($incluyeIva ? $precio / $factor : $precio, 6);
+            $subtotal = round($unitPrice * $quantity, 6);
 
-                return [
-                    'estatus' => false,
-                    'mensaje' => 'El tratamiento fiscal de uno de los artículos no es válido.'
-                ];
+            $descuentoComercial = round((float)$item['descuento_producto'] + (float)$item['descuento_general'], 2);
+            $descuentoFiscal = round($descuentoComercial / $factor, 6);
+            if ($descuentoFiscal < 0 || $descuentoFiscal > $subtotal) {
+                return ['estatus'=>false,'mensaje'=>'Descuento fiscal inválido'];
+            }
+            $base = round($subtotal - $descuentoFiscal, 6);
+            $iva = $factorTipo === 'Tasa' ? round($base * $tasa, 6) : 0.0;
+            $totalItem = round($base + $iva, 2);
+            $importeTicket = round((float)$item['importe'], 2);
+            $sumaTicketC += (int)round($importeTicket * 100);
+            $sumaFiscalC += (int)round($totalItem * 100);
+            $sumaSubtotales += $subtotal;
+            $sumaDescuentos += $descuentoFiscal;
+            if ($factorTipo === 'Tasa') {
+                $key = number_format($tasa, 6, '.', '');
+                $impuestosPorTasa[$key] = ($impuestosPorTasa[$key] ?? 0.0) + $iva;
+            }
+            if ((int)round($totalItem * 100) !== (int)round($importeTicket * 100)) {
+                return ['estatus'=>false,'mensaje'=>'Descuadre fiscal en partida ' . ($item['nombre'] ?? 'sin nombre') . '. Revisar redondeos antes de timbrar.'];
             }
 
-            // --- CÁLCULO DE PRECIOS E IMPORTES (Precio real de la venta) ---
-            $grossUnitPrice = (float)$item['precio']; 
-            $precioIncluyeIva = (int)($item['precio_venta_incluye_iva'] ?? 1) === 1;
-
-            if ($precioIncluyeIva && $tipoFactor === 'Tasa' && $taxRate > 0) {
-                $unitPrice = round($grossUnitPrice / (1 + $taxRate), 6);
-            } else {
-                $unitPrice = $grossUnitPrice;
-            }
-
-            $subtotal = round($unitPrice * $quantity, 2);
-
-            // --- CONSTRUCCIÓN DE IMPUESTOS PARA FACTURAMA V4 ---
-            $taxes = [];
-            $ivaCalculado = 0.00;
-
-            if ($taxObject === '02') {
-                if ($tipoFactor === 'Exento') {
-                    $taxes[] = [
-                        'Name'        => 'IVA Exento',
-                        'Base'        => $subtotal,
-                        'IsRetention' => false
-                    ];
-                } else {
-                    $ivaCalculado = round($subtotal * $taxRate, 2);
-                    $taxes[] = [
-                        'Name'        => 'IVA',
-                        'Base'        => $subtotal,
-                        'Rate'        => $taxRate,
-                        'Total'       => $ivaCalculado,
-                        'IsRetention' => false,
-                        'IsQuota'     => false
-                    ];
-                }
-            }
-
-            $totalItem = round($subtotal + $ivaCalculado, 2);
-
-            $importeVenta = round((float)$item['importe'], 2);
-
-            if (abs($totalItem - $importeVenta) > 0.01) {
-                return [
-                    'estatus' => false,
-                    'mensaje' => 'El importe calculado del artículo no coincide con el importe registrado en la venta.'
-                ];
-            }
-
-            $claveSat = trim((string)$item['clave_sat']);
-            $unidadSat = trim((string)$item['codigo_unidad_sat']);
-
+            $claveSat = trim((string)$item['clave_sat_cfdi']);
+            $unidadSat = trim((string)$item['unidad_sat_cfdi']);
             if ($claveSat === '' || $unidadSat === '') {
-                return [
-                    'estatus' => false,
-                    'mensaje' => 'Un artículo no tiene configurada su clave de producto o unidad SAT.'
-                ];
+                return ['estatus'=>false,'mensaje'=>'Falta clave o unidad SAT'];
             }
-
-            // Estructura compatible con Facturama API V4
-            $cfdiItem = [
-                'ProductCode'          => $claveSat,
-                'IdentificationNumber' => (string)($item['codigo'] ?? ''),
-                'Description'          => (string)$item['nombre'],
-                'Unit'                 => (string)($item['unidad'] ?: 'Pieza'),
-                'UnitCode'             => $unidadSat,
-                'Quantity'             => $quantity,
-                'UnitPrice'            => $unitPrice,
-                'Subtotal'             => $subtotal,
-                'TaxObject'            => $taxObject,
-                'Total'                => $totalItem
+            $concepto = [
+                'ProductCode'=>$claveSat,
+                'IdentificationNumber'=>(string)($item['codigo'] ?? ''),
+                'Description'=>(string)$item['nombre'],
+                'Unit'=>(string)($item['unidad_cfdi'] ?: 'Pieza'),
+                'UnitCode'=>$unidadSat,
+                'Quantity'=>$quantity,
+                'UnitPrice'=>$unitPrice,
+                'Subtotal'=>$subtotal,
+                'TaxObject'=>$objeto,
+                'Total'=>$totalItem
             ];
-
-            if (!empty($taxes)) {
-                $cfdiItem['Taxes'] = $taxes;
+            if ($descuentoFiscal > 0) {
+                $concepto['Discount'] = $descuentoFiscal;
             }
-
-            $cfdiItems[] = $cfdiItem;
+            if ($factorTipo === 'Exento') {
+                $concepto['Taxes'] = [[
+                    'Name'=>'IVA Exento', 'Base'=>$base, 'IsRetention'=>false
+                ]];
+            } elseif ($factorTipo === 'Tasa') {
+                $concepto['Taxes'] = [[
+                    'Name'=>'IVA', 'Rate'=>$tasa, 'Base'=>$base,
+                    'Total'=>$iva, 'IsRetention'=>false, 'IsQuota'=>false
+                ]];
+            }
+            $cfdiItems[] = $concepto;
         }
-
-        if (empty($cfdiItems)) return ['estatus' => false, 'mensaje' => 'La venta no tiene artículos válidos para facturar.'];
+        $ivaResumen = 0.0;
+        foreach ($impuestosPorTasa as $importeTasa) {
+            $ivaResumen += round($importeTasa, 2);
+        }
+        $totalFiscalResumen = round(
+            round($sumaSubtotales, 2) - round($sumaDescuentos, 2) + round($ivaResumen, 2),
+            2
+        );
+        if ($sumaTicketC !== (int)round((float)$venta['total'] * 100)
+            || $sumaFiscalC !== $sumaTicketC
+            || (int)round($totalFiscalResumen * 100) !== $sumaTicketC) {
+            return ['estatus' => false, 'mensaje' =>
+                'La suma fiscal de partidas, descuentos e impuestos no coincide con la venta. Revisa redondeos antes de timbrar.'];
+        }
 
         // 5) Date: reutiliza la guardada si hay intento previo; si no, genera una nueva
         if ($intentoPrevio) {
@@ -610,39 +587,12 @@ class Venta extends Datatable
             ];
         }
 
-        // 4. Estructurar el receptor para el timbrado
         $receiver = [
-            'Rfc'          => $rfc,
-            'Name'         => $razon_social,
-            'CfdiUse'      => $uso_cfdi,
-            'FiscalRegime' => $regimen_fiscal,
-            'TaxZipCode'   => $codigo_postal
-        ];
-        
-        if ($correo !== '') {
-            $receiver['Email'] = $correo;
-        }
-
-        // 3. Estructurar el receptor para el timbrado
-        $receiver = [
-            'Rfc'          => $rfc,
-            'Name'         => $razon_social,
-            'CfdiUse'      => $uso_cfdi,
-            'FiscalRegime' => $regimen_fiscal,
-            'TaxZipCode'   => $codigo_postal
-        ];
-        
-        if ($correo !== '') {
-            $receiver['Email'] = $correo;
-        }
-
-
-        $receiver = [
-            'Rfc'          => $rfc,
-            'Name'         => $razon_social,
-            'CfdiUse'      => $uso_cfdi,
-            'FiscalRegime' => $regimen_fiscal,
-            'TaxZipCode'   => $codigo_postal
+            'Rfc'=>$rfc,
+            'Name'=>$razon_social,
+            'CfdiUse'=>$uso_cfdi,
+            'FiscalRegime'=>$regimen_fiscal,
+            'TaxZipCode'=>$codigo_postal
         ];
         if ($correo !== '') $receiver['Email'] = $correo;
 

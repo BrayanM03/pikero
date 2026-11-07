@@ -66,9 +66,10 @@ function verDetalleVenta(id_venta) {
     items.forEach((it) => {
       itemsHtml += `
         <tr>
-          <td>${it.producto} <br><small class="text-muted">SKU: ${it.codigo || 'S/C'}</small></td>
-          <td class="text-center">${parseFloat(it.cantidad).toFixed(2)} ${it.unidad || 'pza'}</td>
+          <td>${escaparHtml(it.producto)} <br><small class="text-muted">SKU: ${escaparHtml(it.codigo || 'S/C')}</small></td>
+          <td class="text-center">${parseFloat(it.cantidad).toFixed(3)} ${escaparHtml(it.unidad || 'pza')}</td>
           <td class="text-end">$${parseFloat(it.precio).toFixed(2)}</td>
+          <td class="text-end">$${(Number(it.descuento_producto || 0) + Number(it.descuento_general || 0)).toFixed(2)}</td>
           <td class="text-end fw-bold">$${parseFloat(it.importe).toFixed(2)}</td>
         </tr>`;
     });
@@ -126,6 +127,7 @@ function verDetalleVenta(id_venta) {
                 <th>Producto</th>
                 <th class="text-center">Cant</th>
                 <th class="text-end">Precio</th>
+                <th class="text-end">Desc.</th>
                 <th class="text-end">Importe</th>
               </tr>
             </thead>
@@ -135,6 +137,9 @@ function verDetalleVenta(id_venta) {
           </table>
         </div>
         <hr class="my-2">
+        <div class="d-flex justify-content-between small"><span>Subtotal comercial</span><span>$${Number(venta.subtotal || venta.total).toFixed(2)}</span></div>
+        <div class="d-flex justify-content-between small"><span>Descuentos por producto</span><span>-$${Number(venta.descuento_productos || 0).toFixed(2)}</span></div>
+        <div class="d-flex justify-content-between small"><span>Descuento general</span><span>-$${Number(venta.descuento_general || 0).toFixed(2)}</span></div>
         <div class="d-flex justify-content-between h4 fw-bold text-dark">
           <span>Total:</span>
           <span>$${parseFloat(venta.total).toFixed(2)}</span>

@@ -37,6 +37,10 @@ class PuntoVenta
             return ['estatus' => false, 'mensaje' => 'El tipo de venta seleccionado no es válido'];
         }
         $abono_inicial = round((float)($datosVenta['abono_inicial'] ?? 0), 2);
+        $descuentoGeneral = round((float)($datosVenta['descuento_general'] ?? 0), 2);
+        if (!is_finite($descuentoGeneral) || $descuentoGeneral < 0) {
+            return ['estatus' => false, 'mensaje' => 'El descuento general es inválido'];
+        }
         $id_usuario = $_SESSION['id'] ?? 1;
 
         // Si no viene cliente, seleccionar el público en general
@@ -67,8 +71,11 @@ class PuntoVenta
         foreach ($items as $item) {
             $id_producto = (int)($item['id'] ?? 0);
             $cantidad = (float)($item['cantidad'] ?? 0);
-            if ($id_producto <= 0 || $cantidad <= 0) {
+            if ($id_producto <= 0 || !is_finite($cantidad) || $cantidad <= 0) {
                 continue;
+            }
+            if (abs($cantidad - round($cantidad, 3)) > 0.0000001) {
+                return ['estatus' => false, 'mensaje' => 'La cantidad permite máximo tres decimales'];
             }
 
             $prod = $this->db->select(
@@ -176,6 +183,20 @@ class PuntoVenta
                 ? round($precio * $cantidad, 2)
                 : round($importeBase + $ivaTrasladado, 2);
             $subtotal += $importe;
+            // El front solicita un descuento fijo por línea, nunca modifica el precio oficial.
+            $descuentoProducto = round((float)($item['descuento'] ?? 0), 2);
+            if (!is_finite($descuentoProducto) || $descuentoProducto < 0 || $descuentoProducto > $importe) {
+                return ['estatus' => false, 'mensaje' => 'Descuento inválido para ' . $producto['nombre']];
+            }
+            if ((string)$producto['objeto_impuesto'] === '01' && $tipoIva !== 'no_objeto') {
+                return ['estatus' => false, 'mensaje' => 'Objeto de impuesto inconsistente para ' . $producto['nombre']];
+            }
+            if ((string)$producto['objeto_impuesto'] === '02' && $tipoIva === 'no_objeto') {
+                return ['estatus' => false, 'mensaje' => 'Objeto de impuesto inconsistente para ' . $producto['nombre']];
+            }
+            if (!in_array((string)$producto['objeto_impuesto'], ['01','02'], true)) {
+                return ['estatus' => false, 'mensaje' => 'Objeto de impuesto no soportado en el POS'];
+            }
 
             // Costo neto estimado para calcular utilidad
             $costoIncluyeIva = (int)$producto['costo_incluye_iva'] === 1;
@@ -201,6 +222,16 @@ class PuntoVenta
                     'cantidad' => $cantidad,
                     'precio' => $precio,
                     'importe' => $importe,
+                    'importe_bruto' => $importe,
+                    'descuento_producto' => $descuentoProducto,
+                    'descuento_general' => 0.0,
+                    'objeto_impuesto' => $producto['objeto_impuesto'],
+                    'tipo_iva_venta' => $tipoIva,
+                    'precio_venta_incluye_iva' => (int)$producto['precio_venta_incluye_iva'],
+                    'clave_sat' => $producto['clave_sat'],
+                    'codigo_unidad_sat' => $producto['codigo_unidad_sat'],
+                    'descripcion_producto' => $producto['nombre'],
+                    'unidad_producto' => $unidadProducto,
                     'importe_base' => $importeBase,
                     'iva' => $ivaTrasladado,
                     'stock_actual' => $stockActual,
@@ -214,8 +245,59 @@ class PuntoVenta
             return ['estatus' => false, 'mensaje' => 'No hay artículos válidos para cobrar'];
         }
 
+        // Reparto determinista en centavos: descuento de línea primero y general después.
         $subtotal = round($subtotal, 2);
-        $total = $subtotal;
+        $disponibles = [];
+        $totalDisponible = 0;
+        $totalDescuentosProducto = 0;
+        foreach ($itemsValidados as $idx => $it) {
+            $brutoC = $this->aCentavos($it['importe_bruto']);
+            $descC = $this->aCentavos($it['descuento_producto']);
+            $disponibles[$idx] = $brutoC - $descC;
+            $totalDisponible += $disponibles[$idx];
+            $totalDescuentosProducto += $descC;
+        }
+        $generalC = $this->aCentavos($descuentoGeneral);
+        if ($generalC > $totalDisponible) {
+            return ['estatus' => false, 'mensaje' => 'El descuento general supera el importe disponible'];
+        }
+        $reparto = array_fill_keys(array_keys($disponibles), 0);
+        $residuos = [];
+        $asignado = 0;
+        if ($generalC > 0 && $totalDisponible > 0) {
+            foreach ($disponibles as $idx => $disponible) {
+                $cuota = $generalC * $disponible / $totalDisponible;
+                $entero = (int)floor($cuota);
+                $reparto[$idx] = $entero;
+                $asignado += $entero;
+                $residuos[] = ['idx' => $idx, 'resto' => $cuota - $entero];
+            }
+            usort($residuos, static fn($a, $b) => ($b['resto'] <=> $a['resto']) ?: ($a['idx'] <=> $b['idx']));
+            for ($n = 0; $n < $generalC - $asignado; $n++) {
+                $reparto[$residuos[$n]['idx']]++;
+            }
+        }
+        $totalC = 0;
+        foreach ($itemsValidados as $idx => &$it) {
+            $it['descuento_general'] = $reparto[$idx] / 100;
+            $importeC = $disponibles[$idx] - $reparto[$idx];
+            $it['importe'] = $importeC / 100;
+            $totalC += $importeC;
+
+            // Utilidad y base gravable tras ambos descuentos, usando snapshot fiscal.
+            $tasa = in_array($it['tipo_iva_venta'], ['exento', 'no_objeto'], true) ? 0.0 : (float)$it['tipo_iva_venta'];
+            $factor = $tasa > 0 ? 1 + $tasa : 1.0;
+            $base = round($it['importe'] / $factor, 2);
+            $it['importe_base'] = $base;
+            $it['iva'] = round($it['importe'] - $base, 2);
+            $it['utilidad'] = round($base - $it['costo'], 2);
+        }
+        unset($it);
+        $total = $totalC / 100;
+        $descuentoProductosTotal = $totalDescuentosProducto / 100;
+        if ($total <= 0) {
+            return ['estatus' => false, 'mensaje' => 'El total después de descuentos debe ser mayor a cero'];
+        }
 
         // Compatibilidad: si el front todavía manda una sola forma de pago
         if (empty($pagosEntrada) && $id_forma_pago) {
@@ -315,6 +397,8 @@ class PuntoVenta
                 'id_cliente' => $id_cliente,
                 'folio' => $folio,
                 'subtotal' => $subtotal,
+                'descuento_productos' => $descuentoProductosTotal,
+                'descuento_general' => $descuentoGeneral,
                 'total' => $total,
                 'costo' => $costo_total_venta,
                 'utilidad' => $utilidad_total,
@@ -356,6 +440,16 @@ class PuntoVenta
                     'cantidad' => $it['cantidad'],
                     'precio' => $it['precio'],
                     'importe' => $it['importe'],
+                    'importe_bruto' => $it['importe_bruto'],
+                    'descuento_producto' => $it['descuento_producto'],
+                    'descuento_general' => $it['descuento_general'],
+                    'objeto_impuesto' => $it['objeto_impuesto'],
+                    'tipo_iva_venta' => $it['tipo_iva_venta'],
+                    'precio_venta_incluye_iva' => $it['precio_venta_incluye_iva'],
+                    'clave_sat' => $it['clave_sat'],
+                    'codigo_unidad_sat' => $it['codigo_unidad_sat'],
+                    'descripcion_producto' => $it['descripcion_producto'],
+                    'unidad_producto' => $it['unidad_producto'],
                     'costo' => $it['costo'],
                     'utilidad' => $it['utilidad'],
                 ]);
@@ -417,6 +511,8 @@ class PuntoVenta
                 'id_venta' => $id_venta,
                 'folio' => $folio,
                 'total' => $total,
+                'descuento_productos' => $descuentoProductosTotal,
+                'descuento_general' => $descuentoGeneral,
                 'tipo_venta' => $tipo_venta,
                 'abono_inicial' => $abono_inicial,
                 'saldo' => $total - $abono_inicial,

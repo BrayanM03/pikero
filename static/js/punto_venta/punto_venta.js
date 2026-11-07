@@ -11,9 +11,66 @@ const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
 const centavos = (n) => Math.round(Number(n) * 100);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+// Importes comerciales en centavos. PHP recalcula todo contra productos de BD.
+function tasaProducto(it) {
+  const t = String(it.tipo_iva_venta);
+  const objeto = String(it.objeto_impuesto || '');
+  if (!['01', '02'].includes(objeto) || (t === 'no_objeto') !== (objeto === '01')) {
+    throw new Error(`Revisa objeto de impuesto de ${it.nombre}`);
+  }
+  if (['exento', 'no_objeto', '0'].includes(t)) return 0;
+  if (t === '0.16' || t === '0.08') return Number(t);
+  throw new Error(`Configura IVA de ${it.nombre} en el catálogo`);
+}
+
+function resumenDescuentos() {
+  const bruto = carrito.map(it => {
+    const tasa = tasaProducto(it);
+    if (![0, 1].includes(Number(it.precio_venta_incluye_iva))) {
+      throw new Error(`Falta configuración de precio/IVA para ${it.nombre} en el buscador`);
+    }
+    const incluye = Number(it.precio_venta_incluye_iva) === 1;
+    const base = round2(Number(it.precio) * Number(it.cantidad));
+    const monto = incluye ? base : round2(base + round2(base * tasa));
+    return centavos(monto);
+  });
+  const descProducto = carrito.map((it, i) => {
+    const valor = centavos(it.descuento || 0);
+    if (valor < 0 || valor > bruto[i]) throw new Error(`Descuento inválido en ${it.nombre}`);
+    return valor;
+  });
+  const disponibles = bruto.map((v, i) => v - descProducto[i]);
+  const disponibleTotal = disponibles.reduce((a,b)=>a+b,0);
+  const general = centavos($('#pos-descuento-general').val() || 0);
+  if (general < 0 || general > disponibleTotal) throw new Error('Descuento general inválido');
+  const distribucion = disponibles.map(() => 0);
+  if (general && disponibleTotal) {
+    const prioridades = disponibles.map((valor, i) => {
+      const cuota = general * valor / disponibleTotal;
+      const piso = Math.floor(cuota);
+      distribucion[i] = piso;
+      return {i, resto: cuota - piso};
+    }).sort((a,b) => b.resto-a.resto || a.i-b.i);
+    const pendiente = general - distribucion.reduce((a,b)=>a+b,0);
+    for (let j=0; j<pendiente; j++) distribucion[prioridades[j].i]++;
+  }
+  const lineas = bruto.map((b,i) => ({
+    bruto: b/100,
+    descuento_producto: descProducto[i]/100,
+    descuento_general: distribucion[i]/100,
+    total: (disponibles[i]-distribucion[i])/100
+  }));
+  return {
+    lineas,
+    subtotal: bruto.reduce((a,b)=>a+b,0)/100,
+    descuento_productos: descProducto.reduce((a,b)=>a+b,0)/100,
+    descuento_general: general/100,
+    total: lineas.reduce((a,l)=>a+centavos(l.total),0)/100
+  };
+}
+
 function obtenerTotalCarrito() {
-  // Redondeo por partida, igual que el backend
-  return round2(carrito.reduce((acc, it) => acc + round2(it.precio * it.cantidad), 0));
+  return resumenDescuentos().total;
 }
 
 // Monto que se cobra ahora: el total en contado, o el abono inicial en crédito
@@ -60,7 +117,7 @@ function renderCarrito() {
   if (carrito.length === 0) {
     tbody.innerHTML = `
       <tr>
-        <td colspan="5" class="text-center py-5 text-muted">
+        <td colspan="6" class="text-center py-5 text-muted">
           <i class="fa-solid fa-cart-arrow-down fa-3x mb-3 text-secondary opacity-50"></i>
           <p class="mb-0">El carrito está vacío. Escanea o busca productos para comenzar.</p>
         </td>
@@ -70,22 +127,26 @@ function renderCarrito() {
   }
 
   let html = '';
+  let resumen;
+  try { resumen = resumenDescuentos(); }
+  catch (e) { Toast.fire({icon:'error', title:e.message}); return; }
   carrito.forEach((item, idx) => {
-    const importe = item.precio * item.cantidad;
+    const importe = resumen.lineas[idx].total;
     html += `
       <tr>
         <td>
-          <div class="fw-bold">${item.nombre}</div>
-          <small class="text-muted">SKU: ${item.codigo || 'S/C'} | Stock: ${item.stock || 0} ${item.unidad || 'pza'}</small>
+          <div class="fw-bold">${esc(item.nombre)}</div>
+          <small class="text-muted">SKU: ${esc(item.codigo || 'S/C')} | Stock: ${item.stock || 0} ${esc(item.unidad || 'pza')}</small>
         </td>
         <td class="text-center">
           <div class="input-group input-group-sm">
             <button class="btn btn-outline-secondary" type="button" onclick="modificarCantidad(${idx}, -1)">-</button>
-            <input type="number" step="0.5" class="form-control text-center fw-bold px-1" value="${item.cantidad}" onchange="cambiarCantidadDirecta(${idx}, this.value)">
+            <input type="number" step="0.001" class="form-control text-center fw-bold px-1" value="${item.cantidad}" onchange="cambiarCantidadDirecta(${idx}, this.value)">
             <button class="btn btn-outline-secondary" type="button" onclick="modificarCantidad(${idx}, 1)">+</button>
           </div>
         </td>
         <td class="text-end">$${item.precio.toFixed(2)}</td>
+        <td><input type="number" min="0" step="0.01" class="form-control form-control-sm" value="${Number(item.descuento || 0).toFixed(2)}" aria-label="Descuento por producto" onchange="cambiarDescuentoProducto(${idx}, this.value)"></td>
         <td class="text-end fw-bold text-dark">$${importe.toFixed(2)}</td>
         <td class="text-center">
           <button class="btn btn-outline-danger btn-sm" onclick="eliminarDelCarrito(${idx})" title="Quitar">
@@ -100,30 +161,23 @@ function renderCarrito() {
 }
 
 function actualizarTotales() {
-  let subtotal = 0;
-  let totalArticulos = 0;
-
-  carrito.forEach((it) => {
-    subtotal += it.precio * it.cantidad;
-    totalArticulos += it.cantidad;
-  });
-
-  document.getElementById('pos-total-articulos').innerText = totalArticulos.toFixed(totalArticulos % 1 === 0 ? 0 : 2);
-  document.getElementById('pos-subtotal').innerText = `$${subtotal.toFixed(2)}`;
-  document.getElementById('pos-total').innerText = `$${subtotal.toFixed(2)}`;
-
-  const tipoVenta = document.getElementById('pos-tipo-venta').value;
-  const abonoInicial = document.getElementById('pos-abono-inicial');
-  if (tipoVenta === 'credito' && parseFloat(abonoInicial.value || 0) > subtotal) {
-    abonoInicial.value = subtotal.toFixed(2);
-  }
+  let r;
+  try { r = resumenDescuentos(); }
+  catch (e) { $('#pos-total').text('—'); return; }
+  const articulos = carrito.reduce((sum,it) => sum+Number(it.cantidad),0);
+  $('#pos-total-articulos').text(articulos.toFixed(articulos % 1 === 0 ? 0 : 2));
+  $('#pos-subtotal').text(`$${r.subtotal.toFixed(2)}`);
+  $('#pos-descuentos-resumen').text(`-$${(r.descuento_productos+r.descuento_general).toFixed(2)}`);
+  $('#pos-total').text(`$${r.total.toFixed(2)}`);
+  const abono = document.getElementById('pos-abono-inicial');
+  if ($('#pos-tipo-venta').val() === 'credito' && Number(abono.value)>r.total) abono.value=r.total.toFixed(2);
   calcularCambio();
   actualizarRestantePagos();
 }
 
 function calcularCambio() {
-  let total = 0;
-  carrito.forEach((it) => { total += it.precio * it.cantidad; });
+  let total;
+  try { total = obtenerTotalCarrito(); } catch (_) { return; }
 
   const pagoConInput = document.getElementById('pos-pago-con');
   const pagoCon = parseFloat(pagoConInput.value) || 0;
@@ -145,6 +199,15 @@ function calcularCambio() {
 }
 
 function agregarProductoAlCarrito(producto, cantidad = 1) {
+  try {
+    tasaProducto(producto);
+    if (![0, 1].includes(Number(producto.precio_venta_incluye_iva))) {
+      throw new Error('Falta indicar si el precio incluye IVA');
+    }
+  } catch (e) {
+    Toast.fire({ icon: 'warning', title: e.message });
+    return;
+  }
   const stockDisponible = parseFloat(producto.stock || 0);
   const cantidadSolicitada = parseFloat(cantidad || 1);
 
@@ -186,7 +249,11 @@ function agregarProductoAlCarrito(producto, cantidad = 1) {
       precio: parseFloat(producto.precio_venta || 0),
       unidad: producto.unidad,
       stock: stockDisponible,
-      cantidad: cantidadSolicitada
+      cantidad: cantidadSolicitada,
+      descuento: 0,
+      tipo_iva_venta: producto.tipo_iva_venta,
+      precio_venta_incluye_iva: producto.precio_venta_incluye_iva,
+      objeto_impuesto: producto.objeto_impuesto
     });
   }
 
@@ -374,6 +441,16 @@ window.eliminarDelCarrito = (index) => {
   renderCarrito();
 };
 
+window.cambiarDescuentoProducto = (index, valor) => {
+  const item = carrito[index];
+  if (!item) return;
+  const anterior = item.descuento;
+  item.descuento = Number(valor);
+  try { resumenDescuentos(); }
+  catch (e) { item.descuento = anterior; Toast.fire({icon:'warning', title:e.message}); }
+  renderCarrito();
+};
+
 function buscarProductos(termino) {
   if (!termino || termino.trim().length === 0) {
     document.getElementById('pos-resultados').style.display = 'none';
@@ -391,15 +468,21 @@ function buscarProductos(termino) {
     let html = '';
     resp.data.forEach((p) => {
       const sinStock = parseFloat(p.stock || 0) <= 0;
+      let precioMostrado = Number(p.precio_venta) || 0;
+      try {
+        if (Number(p.precio_venta_incluye_iva) === 0) {
+          precioMostrado = round2(precioMostrado * (1 + tasaProducto(p)));
+        }
+      } catch (_) { /* Si faltan datos fiscales, no permitir agregar al carrito. */ }
       html += `
-        <a href="#" class="list-group-item list-group-item-action py-2 item-resultado-pos ${sinStock ? 'border-danger text-muted' : ''}" data-prod='${JSON.stringify(p)}' ${sinStock ? 'aria-disabled="true"' : ''}>
+        <a href="#" class="list-group-item list-group-item-action py-2 item-resultado-pos ${sinStock ? 'border-danger text-muted' : ''}" data-prod='${esc(JSON.stringify(p))}' ${sinStock ? 'aria-disabled="true"' : ''}>
           <div class="d-flex justify-content-between align-items-center">
             <div>
-              <strong>${p.nombre}</strong>
-              <div class="small ${sinStock ? 'text-danger' : 'text-muted'}">SKU: ${p.codigo || 'S/C'} | Stock: ${p.stock || 0} ${p.unidad || 'pza'}</div>
+              <strong>${esc(p.nombre)}</strong>
+              <div class="small ${sinStock ? 'text-danger' : 'text-muted'}">SKU: ${esc(p.codigo || 'S/C')} | Stock: ${p.stock || 0} ${esc(p.unidad || 'pza')}</div>
             </div>
             <div class="text-end">
-              <span class="badge ${sinStock ? 'bg-danger' : 'bg-success'} fs-6">$${parseFloat(p.precio_venta).toFixed(2)}</span>
+              <span class="badge ${sinStock ? 'bg-danger' : 'bg-success'} fs-6">$${precioMostrado.toFixed(2)}</span>
               ${sinStock ? '<div class="small text-danger mt-1">Sin stock</div>' : ''}
             </div>
           </div>
@@ -427,7 +510,10 @@ function procesarCobro() {
     return;
   }
 
-  const total = obtenerTotalCarrito();
+  let resumen;
+  try { resumen = resumenDescuentos(); }
+  catch (e) { Toast.fire({icon:'warning', title:e.message}); return; }
+  const total = resumen.total;
 
   const id_cliente = document.getElementById('pos-cliente').value;
   const tipo_venta = document.getElementById('pos-tipo-venta').value;
@@ -482,6 +568,7 @@ function procesarCobro() {
     title: 'Confirmar Cobro',
     html: `
       <div class="text-start">
+        <p><strong>Descuentos:</strong> -$${(resumen.descuento_productos+resumen.descuento_general).toFixed(2)}</p>
         <p><strong>Cliente:</strong> ${clienteNombre}</p>
         <p><strong>Tipo de venta:</strong> ${tipo_venta === 'credito' ? 'Crédito' : 'Contado'}</p>
         <p><strong>Forma de Pago:</strong><br>${desgloseConfirm}</p>
@@ -500,7 +587,8 @@ function procesarCobro() {
       tipo_venta,
       abono_inicial,
       fecha_venta,
-      items: carrito,
+      items: carrito.map(it => ({id:it.id, cantidad:it.cantidad, descuento:it.descuento||0})),
+      descuento_general: resumen.descuento_general,
       pagos: pagos.map(({ id_forma_pago, monto, referencia }) => ({ id_forma_pago, monto, referencia }))
     };
 
@@ -520,8 +608,8 @@ function procesarCobro() {
         (resp.items || carrito).forEach((it) => {
           itemsTicket += `
             <tr>
-              <td>${it.cantidad} x ${it.nombre}</td>
-              <td class="text-end">$${(it.precio * it.cantidad).toFixed(2)}</td>
+              <td>${it.cantidad} x ${esc(it.nombre)}</td>
+              <td class="text-end">$${Number(it.importe ?? it.precio*it.cantidad).toFixed(2)}</td>
             </tr>`;
         });
 
@@ -578,6 +666,7 @@ function procesarCobro() {
 
           // Reset carrito
           carrito = [];
+          $('#pos-descuento-general').val('0');
           document.getElementById('pos-pago-con').value = '';
           limpiarPagosCapturados();
           renderCarrito();
@@ -591,6 +680,14 @@ function procesarCobro() {
 }
 
 $(document).ready(function () {
+  // Se inserta sin necesitar el archivo de la vista HTML.
+  $('#pos-items-body').closest('table').find('thead tr th').eq(3).before('<th>Desc. $</th>');
+  $('#pos-total').closest('div').before(`
+    <div class="mb-2"><label for="pos-descuento-general" class="form-label">Descuento general ($)</label>
+    <input id="pos-descuento-general" type="number" min="0" step="0.01" value="0" class="form-control form-control-sm">
+    <div class="d-flex justify-content-between small mt-1"><span>Descuentos aplicados</span><strong id="pos-descuentos-resumen">-$0.00</strong></div>
+    </div>`);
+  $('#pos-descuento-general').on('input', () => { renderCarrito(); });
   cargarCatalogos();
 
   $('#pos-forma-pago').on('change', setearFormaPago);
@@ -658,6 +755,7 @@ $(document).ready(function () {
     }).then((r) => {
       if (r.isConfirmed) {
         carrito = [];
+        $('#pos-descuento-general').val('0');
         renderCarrito();
       }
     });

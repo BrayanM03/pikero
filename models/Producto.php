@@ -285,7 +285,7 @@ class Producto extends Datatable
                AND id != ?
                AND estatus = 1",
                 [$codigo, $this->id_ferreteria, $id]
-            ); 
+            );
 
             if (!empty($existe)) {
                 return [
@@ -364,19 +364,23 @@ class Producto extends Datatable
     public function buscarParaPOS(string $termino, ?int $id_sucursal = null): array
     {
         $id_sucursal = $id_sucursal ?? (Tenant::idSucursal() ?? 1);
-        $term = "%{$termino}%";
+        $term = '%' . trim($termino) . '%';
 
         $sql = "SELECT p.id, p.codigo, p.nombre, p.precio_venta, p.precio_compra,
-                       u.abreviatura AS unidad,
-                       COALESCE(inv.existencia, 0) AS stock
-                FROM {$this->tabla} p
-                LEFT JOIN unidades u ON u.id = p.id_unidad
-                LEFT JOIN inventario inv ON inv.id_producto = p.id AND inv.id_sucursal = :id_sucursal
-                WHERE p.estatus = 1 
-                  AND p.id_ferreteria = :id_ferreteria
-                  AND (p.codigo LIKE :s1 OR p.nombre LIKE :s2)
-                ORDER BY p.nombre ASC
-                LIMIT 20";
+                   p.tipo_iva_venta, p.precio_venta_incluye_iva,
+                   p.objeto_impuesto, p.clave_sat, p.codigo_unidad_sat,
+                   u.abreviatura AS unidad,
+                   COALESCE(inv.existencia, 0) AS stock
+            FROM {$this->tabla} p
+            LEFT JOIN unidades u ON u.id = p.id_unidad
+            LEFT JOIN inventario inv
+              ON inv.id_producto = p.id
+             AND inv.id_sucursal = :id_sucursal
+             AND inv.id_ferreteria = p.id_ferreteria
+            WHERE p.estatus = 1
+              AND p.id_ferreteria = :id_ferreteria
+              AND (p.codigo LIKE :s1 OR p.nombre LIKE :s2)
+            ORDER BY p.nombre ASC LIMIT 20";
 
         $data = $this->db->select($sql, [
             ':id_sucursal' => $id_sucursal,
@@ -384,9 +388,9 @@ class Producto extends Datatable
             ':s1' => $term,
             ':s2' => $term
         ]);
-
         return ['estatus' => true, 'mensaje' => 'OK', 'data' => $data];
     }
+
 
 
     private function prepararDatosFiscales(array $data): array
