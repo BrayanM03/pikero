@@ -35,7 +35,7 @@ async function cancelarFactura(idVenta) {
       <p style="margin-bottom:12px">Se cancelará la factura ante el SAT. El ticket seguirá activo.</p>
       <select id="swal-motivo" class="swal2-select" style="width:100%;margin:0 0 12px">
         <option value="">Selecciona el motivo…</option>
-        <option value="01">01 - Emitida con errores, con relación (hay factura sustituta)</option>
+        <option value="01" disabled>01 - Usa "Corregir / Sustituir CFDI"</option>
         <option value="02">02 - Emitida con errores, sin relación</option>
         <option value="03">03 - No se llevó a cabo la operación</option>
       </select>
@@ -214,6 +214,9 @@ html: `
     <button type="button" class="btn btn-outline-success mt-1" id="accion-enviar-factura">
       <i class="fa-solid fa-paper-plane me-2"></i>Enviar factura por correo
     </button>
+     <button type="button" class="btn btn-outline-warning mt-1" id="accion-sustituir-factura">
+       <i class="fa-solid fa-arrows-rotate me-2"></i>Corregir / Sustituir CFDI
+     </button>
      <button type="button" class="btn btn-outline-danger mt-1" id="accion-cancelar-factura">
       <i class="fa-solid fa-cancel me-2"></i>Cancelar Factura
     </button>
@@ -244,6 +247,11 @@ html: `
         } catch (error) {
           document.getElementById('factura-acciones-error').textContent = error.message;
         }
+      });
+      const botonSustituir = document.getElementById('accion-sustituir-factura');
+      if (botonSustituir) botonSustituir.addEventListener('click', () => {
+        Swal.close();
+        if (typeof window.sustituirFacturaVenta === 'function') window.sustituirFacturaVenta(idVenta);
       });
       const botonCorreo = document.getElementById('accion-enviar-factura');
       if (botonCorreo) botonCorreo.addEventListener('click', () => enviarCorreo(idVenta));

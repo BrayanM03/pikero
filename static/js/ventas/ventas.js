@@ -61,6 +61,11 @@ function verDetalleVenta(id_venta) {
     const venta = resp.data.venta;
     const items = resp.data.items || [];
     const abonos = resp.data.abonos || [];
+    const documentos = resp.data.documentos_cfdi || [];
+    const documentosHtml = documentos.length ? `<div class="mt-3"><h6>Historial de CFDI</h6>
+      <div class="table-responsive"><table class="table table-sm"><thead><tr><th>Versión</th><th>UUID</th><th>Estado</th><th>Relación</th></tr></thead>
+      <tbody>${documentos.map(d => `<tr><td>${Number(d.version)}</td><td><code>${escaparHtml(d.uuid || 'Pendiente')}</code></td>
+        <td>${escaparHtml(d.estado)}</td><td>${d.relacion_tipo ? `${escaparHtml(d.relacion_tipo)} → ${escaparHtml(d.uuid_relacionado)}` : 'Original'}</td></tr>`).join('')}</tbody></table></div></div>` : '';
 
     let itemsHtml = '';
     items.forEach((it) => {
@@ -115,8 +120,9 @@ function verDetalleVenta(id_venta) {
           <span>Estado: <strong>${venta.estatus == 1 ? '<span class="text-success">Completada</span>' : '<span class="text-danger">Cancelada</span>'}</strong></span>
         </div>
         <div class="mb-2">
-          <span>Facturación: <strong>${venta.estatus_factura === 'Facturada' ? '<span class="text-success">Facturada</span>' : venta.estatus_factura === 'En proceso' ? '<span class="text-warning">En proceso; reintento disponible</span>' : '<span class="text-secondary">Pendiente</span>'}</strong></span>
+          <span>Facturación: <strong>${venta.estatus_factura === 'Facturada' ? '<span class="text-success">Facturada</span>' : ['Sustituyendo','Sustitucion pendiente'].includes(venta.estatus_factura) ? '<span class="text-warning">Sustitución pendiente</span>' : venta.estatus_factura === 'En proceso' ? '<span class="text-warning">En proceso; reintento disponible</span>' : '<span class="text-secondary">Pendiente</span>'}</strong></span>
           ${venta.estatus_factura === 'Facturada' ? '<button type="button" class="btn btn-outline-success btn-sm ms-2" id="ticket-acciones-factura"><i class="fa-solid fa-file-invoice me-1"></i>PDF, XML o correo</button>' : ''}
+          ${['Sustituyendo','Sustitucion pendiente'].includes(venta.estatus_factura) ? `<button class="btn btn-outline-warning btn-sm ms-2" type="button" id="ticket-revisar-sustitucion">Revisar sustitución</button>` : ''}
         </div>
         ${resumenCredito}
         <hr class="my-2">
@@ -144,6 +150,7 @@ function verDetalleVenta(id_venta) {
           <span>Total:</span>
           <span>$${parseFloat(venta.total).toFixed(2)}</span>
         </div>
+        ${documentosHtml}
       </div>`;
 
    Swal.fire({
@@ -158,6 +165,7 @@ function verDetalleVenta(id_venta) {
       didOpen: () => {
         const botonFactura = document.getElementById('ticket-acciones-factura');
         if (botonFactura) botonFactura.addEventListener('click', () => abrirAccionesFactura(id_venta, venta.factura_correo || ''));
+        document.getElementById('ticket-revisar-sustitucion')?.addEventListener('click', () => window.revisarSustitucionVenta(id_venta));
       }
     }).then((r) => {
       if (r.isDenied) {
@@ -275,6 +283,18 @@ window.verDetalleVenta = (id) => verDetalleVenta(id);
 window.cancelarVenta = (id, folio) => cancelarVenta(id, folio);
 window.editarVenta = (id) => editarVenta(id);
 window.facturarVenta = (id) => abrirFormularioFactura(id, () => tabla && tabla.ajax.reload(null, false));
+window.sustituirFacturaVenta = (id) => {
+  abrirFormularioFactura(id, () => tabla && tabla.ajax.reload(null, false), 'sustitucion');
+};
+window.revisarSustitucionVenta = (id) => {
+  $.ajax({ url: `${BASE_URL}api/ventas.php?tipo=revisar_sustitucion`,
+    type: 'POST', dataType: 'json', data: {id} })
+    .done((r) => {
+      Swal.fire({icon:r.pendiente?'info':(r.estatus?'success':'warning'),
+        title:'Estado de sustitución',text:r.mensaje || 'Sin información'});
+      if (tabla) tabla.ajax.reload(null, false);
+    }).fail(() => Swal.fire({icon:'error',title:'No se pudo consultar la sustitución'}));
+};
 window.accionesFacturaVenta = (id) => {
   $.get(`${BASE_URL}api/ventas.php?tipo=detalle&id=${encodeURIComponent(id)}`, (response) => {
     if (!response.estatus) {
@@ -301,6 +321,9 @@ $(document).ready(function () {
       title: 'Factura', 
       render: (d, type, row) => {
         switch (d) {
+          case 'Sustituyendo':
+          case 'Sustitucion pendiente':
+            return `<button class="btn btn-outline-warning btn-sm" onclick="revisarSustitucionVenta(${Number(row.id)})">Revisar sustitución</button>`;
           case 'Facturada':
             return `<button class="btn btn-success btn-sm" onclick="accionesFacturaVenta(${Number(row.id)})" title="Descargar o enviar factura">
             <i class="fa-solid fa-file-invoice me-1"></i>Factura</button>`;
@@ -333,7 +356,7 @@ $(document).ready(function () {
         <button class="btn btn-info btn-sm text-white" onclick="verDetalleVenta(${row.id})" title="Ver Ticket / Detalle">
           <i class="fa-solid fa-receipt me-1"></i> Detalle
         </button>
-        ${row.estatus == 1 && row.estatus_factura !== 'Facturada' ? `<button class="btn btn-warning btn-sm" onclick="facturarVenta(${row.id})" title="Facturar recibo"><i class="fa-solid fa-file-invoice"></i></button>` : ''}
+        ${row.estatus == 1 && ['Pendiente','En proceso'].includes(row.estatus_factura) ? `<button class="btn btn-warning btn-sm" onclick="facturarVenta(${row.id})" title="Facturar recibo"><i class="fa-solid fa-file-invoice"></i></button>` : ''}
         ${
           tienePermiso('cancelar_ventas') &&  row.estatus == 1 ? `
         <button class="btn btn-danger btn-sm" onclick="cancelarVenta(${row.id}, '${row.folio}')" title="Cancelar Venta">

@@ -203,3 +203,38 @@ if($tipo === 'editar_venta') {
     header('Content-Type: application/json; charset=utf-8');
     $controller->editar(1, $id_venta, $payload);
 }
+
+
+if ($tipo === 'sustituir_factura') {
+    header('Content-Type: application/json; charset=utf-8');
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['estatus'=>false, 'mensaje'=>'Solo POST']);
+        exit;
+    }
+    // APLICAR AQUÍ autorización de usuario (sustituir CFDI) y CSRF.
+    $data=json_decode(file_get_contents('php://input'),true);
+    if (!is_array($data)) {
+        http_response_code(400);
+        echo json_encode(['estatus'=>false, 'mensaje'=>'JSON inválido']);
+        exit;
+    }
+    $modelo=new Venta();
+    $r=$modelo->sustituirFactura((int)($data['id']??0),$data);
+    echo json_encode($r,JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+if ($tipo === 'revisar_sustitucion') {
+    header('Content-Type: application/json; charset=utf-8');
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        http_response_code(405);
+        echo json_encode(['estatus'=>false, 'mensaje'=>'Solo POST']);
+        exit;
+    }
+    // APLICAR AQUÍ autorización de usuario (ver/revisar CFDI) y CSRF.
+    $modelo=new Venta();
+    $r=$modelo->revisarSustitucion((int)($_POST['id']??0));
+    echo json_encode($r,JSON_UNESCAPED_UNICODE);
+    exit;
+}

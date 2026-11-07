@@ -249,11 +249,26 @@ class FacturamaClient
         ];
     }
 
-    return [
-        'estatus'    => true,
-        'sat_status' => $response['body']['sat_status'] ?? 'canceled',
-        'mensaje'    => $response['body']['mensaje'] ?? 'Factura cancelada correctamente'
-    ];
+   $body = $response['body'] ?? [];
+
+$satStatus = strtolower(
+    trim((string)($body['sat_status'] ?? ''))
+);
+
+if (!in_array($satStatus, [
+    'canceled',
+    'pending',
+    'active'
+], true)) {
+    $satStatus = 'unknown';
+}
+
+return [
+    'estatus' => true,
+    'sat_status' => $satStatus,
+    'mensaje' => $body['mensaje']
+        ?? 'Solicitud procesada; verifica el estado SAT.'
+];
 }
 
     // ---------------------------------------------------------------

@@ -84,7 +84,8 @@ function calcularFactura(items, venta) {
     tieneLegado: partidas.some((x) => x.heredado) };
 }
 
-export function abrirFormularioFactura(idVenta, onSuccess = null) {
+export function abrirFormularioFactura(idVenta, onSuccess = null, modo = 'normal') {
+  const sustitucion = modo === 'sustitucion';
   mostrarCargando('Cargando', 'Obteniendo datos...');
 
   $.getJSON(`${BASE_URL}api/ventas.php?tipo=emisores`).done((issuerResponse) => {
@@ -109,6 +110,14 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
       const clientes = resp.data || [];
       const items = detail.data?.items || [];
       const venta = detail.data?.venta || {};
+      if (sustitucion && (venta.estatus_factura !== 'Facturada' || !venta.uuid_factura)) {
+        Swal.fire({icon:'warning',title:'Sustitución no disponible',text:'El ticket no tiene una factura vigente o existe un proceso pendiente.'});
+        return;
+      }
+      if (!sustitucion && !['Pendiente','En proceso'].includes(venta.estatus_factura)) {
+        Swal.fire({icon:'warning',title:'Factura ya existente',text:'Usa Sustituir CFDI o consulta el historial fiscal.'});
+        return;
+      }
       let calculo;
       try { calculo = calcularFactura(items, venta); }
       catch (e) {
@@ -127,8 +136,11 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
       }
 
       const opcionesClientes = clientes.map((c) => `<option value="${Number(c.id)}">${escaparHtml(c.nombre)}${c.rfc ? ` (${escaparHtml(c.rfc)})` : ''}</option>`).join('');
-      const idEmisorUnico = emisores.length === 1 ? Number(emisores[0].issuer_id) : null;
-      const selectorEmisor = emisores.length > 1
+      const idEmisorUnico = sustitucion ? Number(venta.factura_issuer_id) :
+        (emisores.length === 1 ? Number(emisores[0].issuer_id) : null);
+      const selectorEmisor = sustitucion
+        ? `<p class="mb-3">Emisor original (obligatorio): <strong>${escaparHtml(emisores.find(x=>Number(x.issuer_id)===idEmisorUnico)?.name || 'Emisor ' + idEmisorUnico)}</strong></p>`
+        : emisores.length > 1
         ? `<div class="mb-3"><label class="form-label" for="fac_emisor">Emisor *</label><select id="fac_emisor" class="form-select"><option value="">Selecciona un emisor</option>${emisores.map((x) => `<option value="${Number(x.issuer_id)}">${escaparHtml(x.name)}${x.rfc ? ` (${escaparHtml(x.rfc)})` : ''}</option>`).join('')}</select></div>`
         : `<p class="mb-3">Emisor: <strong>${escaparHtml(emisores[0].name)}${emisores[0].rfc ? ` (${escaparHtml(emisores[0].rfc)})` : ''}</strong></p>`;
 
@@ -142,14 +154,15 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
           <td class="text-end">${moneda(p.totalFiscal)}</td></tr>`;
       }).join('');
       const esCredito = venta.tipo_venta === 'credito' || Number(venta.saldo_pendiente || 0) > 0;
-      const metodoSugerido = esCredito ? 'PPD' : 'PUE';
+      const metodoSugerido = sustitucion ? (venta.factura_metodo_pago || 'PUE') : (esCredito ? 'PPD' : 'PUE');
       // venta.forma_pago es un nombre interno (por ejemplo "Efectivo"), NO clave SAT.
-      const formaSugerida = esCredito ? '99' : '01';
+      const formaSugerida = sustitucion ? (venta.factura_forma_pago || '01') : (esCredito ? '99' : '01');
 
       Swal.fire({
-        title: `Facturar recibo ${escaparHtml(venta.folio)}`, width: '1000px',
+        title: `${sustitucion ? 'Sustituir CFDI del ticket' : 'Facturar recibo'} ${escaparHtml(venta.folio)}`, width: '1000px',
         html: `<div class="text-start">
           ${selectorEmisor}
+          ${sustitucion ? `<p class="alert alert-warning small">Se emitirá un CFDI nuevo con relación 04 al UUID <code>${escaparHtml(venta.uuid_factura)}</code>. Luego Pikero solicitará cancelar el anterior con motivo 01. El ticket y su total no cambian.</p>` : ''}
           <label class="form-label">Cliente del catálogo</label>
           <select id="fac_cliente" class="selectpicker w-100 mb-3" data-live-search="true"><option value="">Captura datos fiscales manualmente</option>${opcionesClientes}</select>
           <div class="row">
@@ -157,24 +170,7 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
             <div class="col-md-6 mb-3"><label class="form-label">Razón social *</label><input id="fac_razon" class="form-control"></div>
           </div>
           <div class="row">
-            <div class="col-md-3 mb-3">
-              <label for="fac_cp" class="form-label">
-                Código postal fiscal *
-              </label>
-              <input
-                id="fac_cp"
-                type="text"
-                class="form-control"
-                inputmode="numeric"
-                maxlength="5"
-                pattern="[0-9]{5}"
-                placeholder="Ej. 87454"
-                autocomplete="postal-code"
-              >
-              <small id="fac_cp_estado" class="form-text text-muted">
-                Captura el CP de tu domicilio fiscal.
-              </small>
-            </div>
+            <div class="col-md-4 mb-3"><label class="form-label">Código postal fiscal *</label><input id="fac_cp" type="text" class="form-control" inputmode="numeric" maxlength="5" pattern="[0-9]{5}" placeholder="87454"></div>
             <div class="col-md-4 mb-3"><label class="form-label">Régimen fiscal *</label><select id="fac_regimen" class="selectpicker w-100" data-live-search="true">${opcionesSAT(regimenes)}</select></div>
             <div class="col-md-4 mb-3"><label class="form-label">Uso CFDI *</label><select id="fac_uso" class="selectpicker w-100" data-live-search="true">${opcionesSAT(usosCfdi)}</select></div>
           </div>
@@ -196,9 +192,20 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
           </div>
           ${calculo.tieneLegado ? '<p class="small text-warning mt-2">Aviso: este ticket es anterior a la migración. Se consultó la configuración fiscal actual del catálogo; revisa el tratamiento antes de timbrar.</p>' : ''}
         </div>`,
-        showCancelButton: true, confirmButtonText: 'Solicitar factura', cancelButtonText: 'Cancelar',
+        showCancelButton: true, confirmButtonText: sustitucion ? 'Emitir sustituta' : 'Solicitar factura', cancelButtonText: 'Cancelar',
         didOpen: () => {
           inicializarSelectpicker(Swal.getPopup());
+          if (sustitucion) {
+            $('#fac_rfc').val(venta.factura_rfc || '');
+            $('#fac_razon').val(venta.factura_razon_social || '');
+            $('#fac_cp').val(venta.factura_codigo_postal || '');
+            $('#fac_regimen').selectpicker('val', venta.factura_regimen_fiscal || '');
+            $('#fac_uso').selectpicker('val', venta.factura_uso_cfdi || '');
+            $('#fac_correo').val(venta.factura_correo || '');
+            $('#fac_metodo').selectpicker('val', venta.factura_metodo_pago || 'PUE');
+            $('#fac_forma').selectpicker('val', venta.factura_forma_pago || '01');
+            $('#fac_metodo, #fac_forma').prop('disabled', true).selectpicker('refresh');
+          }
           $('#fac_metodo').on('change', function () {
             if ($(this).val() === 'PPD') $('#fac_forma').selectpicker('val', '99');
             else if ($('#fac_forma').val() === '99') $('#fac_forma').selectpicker('val', '01');
@@ -216,16 +223,7 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
         },
         preConfirm: () => {
           const issuerId = idEmisorUnico ?? Number($('#fac_emisor').val());
-          const cp = $('#fac_cp').val().trim();
-
           if (!issuerId) { Swal.showValidationMessage('Selecciona un emisor.'); return false; }
-          if (!validarFormatoCP(cp)) {
-              Swal.showValidationMessage(
-                'El código postal debe contener exactamente 5 números.'
-              );
-              return false;
-            }
-
           const metodo = $('#fac_metodo').val();
           const forma = $('#fac_forma').val();
           if (metodo === 'PPD' && forma !== '99') {
@@ -242,6 +240,7 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
             uso_cfdi: capturar('#fac_uso'), correo: capturar('#fac_correo'),
             metodo_pago: metodo, forma_pago: forma
           };
+          if (!/^[0-9]{5}$/.test(datos.codigo_postal)) { Swal.showValidationMessage('El CP debe tener 5 dígitos'); return false; }
           if (!datos.rfc || !datos.razon_social || !datos.codigo_postal ||
               !datos.regimen_fiscal || !datos.uso_cfdi) {
             Swal.showValidationMessage('Completa los datos fiscales obligatorios.'); return false;
@@ -251,8 +250,8 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
         }
       }).then((result) => {
         if (!result.isConfirmed) return;
-        mostrarCargando('Emitiendo factura', 'Esto puede tardar unos segundos...');
-        $.ajax({ url: `${BASE_URL}api/ventas.php?tipo=facturar`, type: 'POST',
+        mostrarCargando(sustitucion ? 'Emitiendo CFDI sustituto' : 'Emitiendo factura', 'Esto puede tardar unos segundos...');
+        $.ajax({ url: `${BASE_URL}api/ventas.php?tipo=${sustitucion ? 'sustituir_factura' : 'facturar'}`,  type: 'POST',
           contentType: 'application/json', data: JSON.stringify(result.value), dataType: 'json' })
           .done((response) => {
             if (!response.estatus) {
@@ -260,15 +259,15 @@ export function abrirFormularioFactura(idVenta, onSuccess = null) {
               return;
             }
             onSuccess?.(response);
-            abrirAccionesFactura(idVenta, result.value.correo);
+            if (response.pendiente) {
+              Swal.fire({icon:'info',title:'Sustituta emitida',text:response.mensaje || 'La cancelación de la original todavía está pendiente.'});
+            } else {
+              abrirAccionesFactura(idVenta, result.value.correo);
+            }
           })
           .fail(() => Swal.fire({ icon: 'error', title: 'No fue posible emitir la factura',
             text: 'No sabemos si Facturama la timbró. Consulta el estado antes de reintentar.' }));
       });
     }).fail(() => Swal.fire({ icon: 'error', title: 'No se pudieron cargar los datos', text: 'Inténtalo más tarde.' }));
   }).fail(() => Swal.fire({ icon: 'error', title: 'No se pudieron consultar los emisores', text: 'Inténtalo más tarde.' }));
-
-   function validarFormatoCP(cp) {
-              return /^\d{5}$/.test(cp);
-            }
 }

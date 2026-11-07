@@ -8,6 +8,7 @@ require_once __DIR__ . '/../services/InvoiceMailer.php';
 
 class Venta extends Datatable
 {
+    private const UUID_RE = '/^[a-fA-F0-9]{8}-(?:[a-fA-F0-9]{4}-){3}[a-fA-F0-9]{12}$/';
     private Date $fecha;
     private ?int $id_ferreteria;
     private ?int $id_sucursal;
@@ -229,6 +230,11 @@ class Venta extends Datatable
             [$this->id_ferreteria]
         );
 
+        $documentos = $this->db->select(
+            'SELECT id,version,tipo_cfdi,folio,fecha_cfdi,issuer_id,uuid,estado,relacion_tipo,uuid_relacionado,documento_sustituido_id,sat_status
+             FROM cfdi_documentos WHERE id_venta=? AND id_ferreteria=? AND id_sucursal=? ORDER BY version ASC',
+            [$id_venta,$this->id_ferreteria,$this->id_sucursal]
+        );
         return [
             'estatus' => true,
             'mensaje' => 'OK',
@@ -236,7 +242,8 @@ class Venta extends Datatable
                 'venta' => $venta[0],
                 'items' => $items,
                 'abonos' => $abonos,
-                'formas_pago' => $formas_pago
+                'formas_pago' => $formas_pago,
+                'documentos_cfdi' => $documentos
             ]
         ];
     }
@@ -368,7 +375,7 @@ class Venta extends Datatable
         if (empty($ventaRows)) return ['estatus' => false, 'mensaje' => 'Recibo no encontrado'];
         $venta = $ventaRows[0];
         if ((int)$venta['estatus'] === 0) return ['estatus' => false, 'mensaje' => 'No se puede facturar un recibo cancelado'];
-        if (($venta['estatus_factura'] ?? 'Pendiente') === 'Facturada') return ['estatus' => false, 'mensaje' => 'Este recibo ya está facturado'];
+        if (!in_array(($venta['estatus_factura'] ?? 'Pendiente'), ['Pendiente','En proceso'], true)) return ['estatus' => false, 'mensaje' => 'La venta ya tiene una factura o una sustitución pendiente; consulta su historial fiscal.'];
 
         $client   = new FacturamaClient();
         $clientId = (string)$this->id_ferreteria;
@@ -392,6 +399,119 @@ class Venta extends Datatable
             // No existe: es seguro reintentar con el mismo Folio + Date
         }
 
+        // Fecha fija durante todos los reintentos del mismo CFDI.
+        if ($intentoPrevio) {
+            $invoiceDate = (string)$venta['factura_date'];
+        } else {
+            $date = new DateTime('now', new DateTimeZone('America/Matamoros'));
+            $date->modify('-5 minutes');
+            $invoiceDate = $date->format('Y-m-d\TH:i:s');
+        }
+        $preparado = $this->prepararPayloadFactura(
+            $id_venta, $venta, $data, $client, $folio, $invoiceDate,
+            $intentoPrevio ? (int)$venta['factura_issuer_id'] : null
+        );
+        if (!$preparado['estatus']) return $preparado;
+        $issuerId = $preparado['issuer_id'];
+        $cfdiPayload = $preparado['payload'];
+        $deliveryOptions = $preparado['entrega'];
+        $rfc = $preparado['rfc'];
+        $razon_social = $preparado['razon_social'];
+        $codigo_postal = $preparado['codigo_postal'];
+        $regimen_fiscal = $preparado['regimen_fiscal'];
+        $uso_cfdi = $preparado['uso_cfdi'];
+        $paymentMethod = $preparado['metodo_pago'];
+        $paymentForm = $preparado['forma_pago'];
+
+        // 6) Marcar "En proceso" y guardar identidad
+       // 6) Marcar "En proceso" y guardar identidad con control de concurrencia real
+        $this->db->beginTransaction();
+        try {
+            $locked = $this->db->select(
+                'SELECT estatus, estatus_factura, factura_date, factura_intent_at, factura_issuer_id
+             FROM ventas WHERE id = ? AND id_ferreteria = ? AND id_sucursal = ? FOR UPDATE',
+                [$id_venta, $this->id_ferreteria, $this->id_sucursal]
+            );
+            
+            if (empty($locked) || (int)$locked[0]['estatus'] === 0) {
+                $this->db->rollBack();
+                return ['estatus' => false, 'mensaje' => 'La venta no está disponible para facturar'];
+            }
+
+            if (!in_array($locked[0]['estatus_factura'], ['Pendiente','En proceso'], true)) {
+                $this->db->rollBack();
+                return ['estatus' => false, 'mensaje' => 'Esta venta ya tiene factura o sustitución en curso'];
+            }
+
+            // CONTROL DE CONCURRENCIA ACTIVA:
+            if ($locked[0]['estatus_factura'] === 'En proceso' && !empty($locked[0]['factura_intent_at'])) {
+                $tiempoTranscurrido = time() - strtotime($locked[0]['factura_intent_at']);
+                
+                // Si el intento anterior ocurrió hace menos de 45 segundos, hay otra petición activa procesándolo
+                if ($tiempoTranscurrido < 120) {
+                    $this->db->rollBack();
+                    return ['estatus' => false, 'mensaje' => 'La factura ya se está procesando en este momento. Por favor espera unos segundos.'];
+                }
+            }
+
+            // Si es un intento previo antiguo (timeout / 5xx real), respetamos su fecha original de idempotencia
+            if ($locked[0]['estatus_factura'] === 'En proceso' && !empty($locked[0]['factura_date'])) {
+                $invoiceDate = (string)$locked[0]['factura_date'];
+                $cfdiPayload['Date'] = $invoiceDate;
+            }
+
+            $nowTimestamp = date('Y-m-d H:i:s');
+
+            $this->db->update('ventas', [
+                'estatus_factura'        => 'En proceso',
+                'factura_issuer_id'      => $issuerId,
+                'factura_date'           => $invoiceDate,
+                'factura_intent_at'      => $nowTimestamp, // <- Registramos el timestamp exacto del intento
+                'factura_rfc'            => $rfc,
+                'factura_razon_social'   => $razon_social,
+                'factura_codigo_postal'  => $codigo_postal,
+                'factura_regimen_fiscal' => $regimen_fiscal,
+                'factura_uso_cfdi'       => $uso_cfdi,
+                'factura_correo'         => $correo,
+                'factura_metodo_pago'    => $paymentMethod,
+                'factura_forma_pago'     => $paymentForm,
+                'factura_payload'        => json_encode($cfdiPayload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE)
+            ], 'id = ? AND id_ferreteria = ?', [$id_venta, $this->id_ferreteria ?? $this->id_ferreteria]); // Mantén tu condición de id_ferreteria
+            
+            $this->db->commit();
+        } catch (Throwable $exception) {
+            $this->db->rollBack();
+            return ['estatus' => false, 'mensaje' => 'No se pudo guardar la solicitud antes de facturar.'];
+        }
+
+        // 7) Timbrar
+        $response = $client->facturar($clientId, $issuerId, $cfdiPayload, $deliveryOptions);
+
+        if (!$response['estatus']) {
+            $httpCode = (int)($response['http_code'] ?? 0);
+            if ($httpCode >= 400 && $httpCode < 500 && !in_array($httpCode, [408, 429], true)) {
+                $this->db->update('ventas', [
+                    'estatus_factura'   => 'Pendiente',
+                    'factura_date'      => null,
+                    'factura_issuer_id' => null
+                ], 'id = ? AND id_ferreteria = ? AND estatus_factura = ?', [$id_venta, $this->id_ferreteria, 'En proceso']);
+                return $response;
+            }
+            $response['mensaje'] = 'No se pudo confirmar la emisión. Vuelve a intentar: se verificará antes de reenviar.';
+            return $response;
+        }
+
+        return $this->finalizarFactura($id_venta, $folio, $response['data'], $correo);
+    }
+
+    /** ÚNICO constructor de conceptos y CFDI: reutilizado en emisión y sustitución. */
+    private function prepararPayloadFactura(
+        int $id_venta, array $venta, array $data,
+        FacturamaClient $client, string $folio, string $invoiceDate,
+        ?int $emisorFijo = null
+    ): array {
+        $clientId = (string)$this->id_ferreteria;
+        $correo = trim((string)($data['correo'] ?? ''));
         // 2) Validaciones del formulario (siempre, con los datos actuales)
         $rfc             = strtoupper(trim((string)($data['rfc'] ?? '')));
         $razon_social    = trim((string)($data['razon_social'] ?? ''));
@@ -411,9 +531,7 @@ class Venta extends Datatable
         // 3) Emisor: si hay intento previo se conserva el mismo; si no, el del formulario
         $issuersResponse = $client->emisores($clientId);
         if (!$issuersResponse['estatus']) return $issuersResponse;
-        $requestedIssuerId = $intentoPrevio
-            ? (int)$venta['factura_issuer_id']
-            : (isset($data['issuer_id']) && $data['issuer_id'] !== '' ? (int)$data['issuer_id'] : null);
+        $requestedIssuerId = $emisorFijo ?? (isset($data['issuer_id']) && $data['issuer_id'] !== '' ? (int)$data['issuer_id'] : null);
         $issuerResponse = FacturamaClient::seleccionarEmisor($issuersResponse['data'], $requestedIssuerId);
         if (!$issuerResponse['estatus']) return $issuerResponse;
         $issuer   = $issuerResponse['data'];
@@ -535,15 +653,6 @@ class Venta extends Datatable
                 'La suma fiscal de partidas, descuentos e impuestos no coincide con la venta. Revisa redondeos antes de timbrar.'];
         }
 
-        // 5) Date: reutiliza la guardada si hay intento previo; si no, genera una nueva
-        if ($intentoPrevio) {
-            $invoiceDate = (string)$venta['factura_date'];
-        } else {
-            $date = new DateTime('now', new DateTimeZone('America/Mexico_City'));
-            $date->modify('-5 minutes');
-            $invoiceDate = $date->format('Y-m-d\TH:i:s');
-        }
-
         $ferreteriaRows = $this->db->select('SELECT logo, codigo_postal FROM ferreterias WHERE id = ?', [$this->id_ferreteria]);
         $ferreteriaInfo = $ferreteriaRows[0] ?? [];
         $issuerPostalCode = '';
@@ -610,99 +719,344 @@ class Venta extends Datatable
         ];
         $deliveryOptions = $this->opcionesEntrega($correo, $ferreteriaInfo);
 
-        // 6) Marcar "En proceso" y guardar identidad
-       // 6) Marcar "En proceso" y guardar identidad con control de concurrencia real
-        $this->db->beginTransaction();
+        return [
+            'estatus'=>true, 'payload'=>$cfdiPayload, 'entrega'=>$deliveryOptions,
+            'issuer_id'=>$issuerId, 'correo'=>$correo,
+            'rfc'=>$rfc, 'razon_social'=>$razon_social,
+            'codigo_postal'=>$codigo_postal, 'regimen_fiscal'=>$regimen_fiscal,
+            'uso_cfdi'=>$uso_cfdi, 'metodo_pago'=>$paymentMethod,
+            'forma_pago'=>$paymentForm
+        ];
+    }
+
+    /**
+     * Emite un sustituto del CFDI vigente, sin cancelar el ticket operativo.
+     * IMPORTANTE: solo personal autorizado debe acceder al endpoint que invoque este método.
+     */
+    public function sustituirFactura(int $id_venta, array $data): array
+    {
+        $ventaRows=$this->db->select(
+            'SELECT * FROM ventas WHERE id=? AND id_ferreteria=? AND id_sucursal=?',
+            [$id_venta,$this->id_ferreteria,$this->id_sucursal]
+        );
+        if (!$ventaRows || (int)$ventaRows[0]['estatus'] !== 1) {
+            return ['estatus'=>false,'mensaje'=>'Venta inexistente o cancelada'];
+        }
+        $venta=$ventaRows[0];
+        // En esta primera versión solo se corrige el receptor fiscal:
+        // conserva el método y forma de pago originales para no cambiar
+        // las condiciones de una operación que ya se cobró.
+        if (empty($venta['factura_metodo_pago']) || empty($venta['factura_forma_pago'])) {
+            return ['estatus'=>false,'mensaje'=>'Factura anterior sin método/forma de pago; requiere revisión'];
+        }
+        $data['metodo_pago']=(string)$venta['factura_metodo_pago'];
+        $data['forma_pago']=(string)$venta['factura_forma_pago'];
+        if ($venta['estatus_factura'] !== 'Facturada' ||
+            empty($venta['factura_id']) || empty($venta['uuid_factura']) ||
+            (int)$venta['factura_issuer_id']<=0) {
+            return ['estatus'=>false,'mensaje'=>'La factura vigente no está disponible para sustitución; revisa su estado'];
+        }
+        if (!preg_match(self::UUID_RE,(string)$venta['uuid_factura'])) {
+            return ['estatus'=>false,'mensaje'=>'UUID original inválido'];
+        }
+        // Tomar la versión nueva solo como estimación: se revalida bajo bloqueo FOR UPDATE.
+        $versionRows=$this->db->select(
+            'SELECT COALESCE(MAX(`version`),0) AS ultima FROM cfdi_documentos WHERE id_venta=?',[$id_venta]
+        );
+        $version=(int)($versionRows[0]['ultima']??0)+1;
+        if ($version<2 || $version>999) return ['estatus'=>false,'mensaje'=>'Historial CFDI incompleto o límite de versiones'];
+        $folio=substr((string)$venta['folio'],0,65).'-S'.$version;
+        $date=new DateTime('now',new DateTimeZone('America/Matamoros'));
+        $date->modify('-5 minutes');
+        $fecha=$date->format('Y-m-d\TH:i:s');
+        $client=new FacturamaClient();
+        $preparado=$this->prepararPayloadFactura(
+            $id_venta,$venta,$data,$client,$folio,$fecha,(int)$venta['factura_issuer_id']
+        );
+        if (!$preparado['estatus']) return $preparado;
+        $payload=$preparado['payload'];
+        $payload['Relations']=[
+            'Type'=>'04',
+            'Cfdis'=>[['Uuid'=>strtoupper((string)$venta['uuid_factura'])]]
+        ];
+        $payloadJSON=json_encode($payload,JSON_UNESCAPED_UNICODE|JSON_UNESCAPED_SLASHES|JSON_THROW_ON_ERROR);
+        $docId=0;
         try {
-            $locked = $this->db->select(
-                'SELECT estatus, estatus_factura, factura_date, factura_intent_at, factura_issuer_id
-             FROM ventas WHERE id = ? AND id_ferreteria = ? AND id_sucursal = ? FOR UPDATE',
-                [$id_venta, $this->id_ferreteria, $this->id_sucursal]
+            $this->db->beginTransaction();
+            $locked=$this->db->select(
+                'SELECT * FROM ventas WHERE id=? AND id_ferreteria=? AND id_sucursal=? FOR UPDATE',
+                [$id_venta,$this->id_ferreteria,$this->id_sucursal]
             );
-            
-            if (empty($locked) || (int)$locked[0]['estatus'] === 0) {
-                $this->db->rollBack();
-                return ['estatus' => false, 'mensaje' => 'La venta no está disponible para facturar'];
+            if (!$locked || $locked[0]['estatus_factura']!=='Facturada' ||
+                $locked[0]['uuid_factura']!==$venta['uuid_factura']) {
+                throw new RuntimeException('Otro proceso modificó la factura; actualiza la pantalla');
             }
-
-            if ($locked[0]['estatus_factura'] === 'Facturada') {
-                $this->db->rollBack();
-                return ['estatus' => false, 'mensaje' => 'Este recibo ya está facturado'];
+            $pendiente=$this->db->select(
+                "SELECT id FROM cfdi_documentos WHERE id_venta=? AND relacion_tipo='04' AND estado IN ('emitiendo','incierto','pendiente_cancelacion','revision') LIMIT 1",
+                [$id_venta]
+            );
+            if ($pendiente) throw new RuntimeException('Ya hay una sustitución pendiente; revisa antes de timbrar otra');
+            $anterior=$this->db->select(
+                'SELECT * FROM cfdi_documentos WHERE id_venta=? AND uuid=? AND facturama_id=? FOR UPDATE',
+                [$id_venta,strtoupper((string)$venta['uuid_factura']),(string)$venta['factura_id']]
+            );
+            if (!$anterior || $anterior[0]['estado']!=='emitido') {
+                throw new RuntimeException('No existe documento vigente en el historial. Revisa migración/estado SAT');
             }
-
-            // CONTROL DE CONCURRENCIA ACTIVA:
-            if ($locked[0]['estatus_factura'] === 'En proceso' && !empty($locked[0]['factura_intent_at'])) {
-                $tiempoTranscurrido = time() - strtotime($locked[0]['factura_intent_at']);
-                
-                // Si el intento anterior ocurrió hace menos de 45 segundos, hay otra petición activa procesándolo
-                if ($tiempoTranscurrido < 120) {
-                    $this->db->rollBack();
-                    return ['estatus' => false, 'mensaje' => 'La factura ya se está procesando en este momento. Por favor espera unos segundos.'];
-                }
+            $max=$this->db->select('SELECT COALESCE(MAX(`version`),0) AS ultima FROM cfdi_documentos WHERE id_venta=?',[$id_venta]);
+            if ((int)$max[0]['ultima']+1!==$version) {
+                throw new RuntimeException('Versión de sustitución ocupada; vuelve a abrir el formulario');
             }
-
-            // Si es un intento previo antiguo (timeout / 5xx real), respetamos su fecha original de idempotencia
-            if ($locked[0]['estatus_factura'] === 'En proceso' && !empty($locked[0]['factura_date'])) {
-                $invoiceDate = (string)$locked[0]['factura_date'];
-                $cfdiPayload['Date'] = $invoiceDate;
-            }
-
-            $nowTimestamp = date('Y-m-d H:i:s');
-
-            $this->db->update('ventas', [
-                'estatus_factura'        => 'En proceso',
-                'factura_issuer_id'      => $issuerId,
-                'factura_date'           => $invoiceDate,
-                'factura_intent_at'      => $nowTimestamp, // <- Registramos el timestamp exacto del intento
-                'factura_rfc'            => $rfc,
-                'factura_razon_social'   => $razon_social,
-                'factura_codigo_postal'  => $codigo_postal,
-                'factura_regimen_fiscal' => $regimen_fiscal,
-                'factura_uso_cfdi'       => $uso_cfdi,
-                'factura_correo'         => $correo,
-                'factura_metodo_pago'    => $paymentMethod,
-                'factura_forma_pago'     => $paymentForm
-            ], 'id = ? AND id_ferreteria = ?', [$id_venta, $this->id_ferreteria ?? $this->id_ferreteria]); // Mantén tu condición de id_ferreteria
-            
+            $docId=(int)$this->db->insert('cfdi_documentos',[
+                'id_venta'=>$id_venta, 'id_ferreteria'=>$this->id_ferreteria,
+                'id_sucursal'=>$this->id_sucursal, 'version'=>$version,
+                'tipo_cfdi'=>'I','folio'=>$folio,'fecha_cfdi'=>$fecha,
+                'issuer_id'=>(int)$venta['factura_issuer_id'],
+                'estado'=>'emitiendo', 'relacion_tipo'=>'04',
+                'uuid_relacionado'=>strtoupper((string)$venta['uuid_factura']),
+                'documento_sustituido_id'=>(int)$anterior[0]['id'],
+                'correo'=>$preparado['correo'], 'payload_json'=>$payloadJSON
+            ]);
+            if ($docId<=0) throw new RuntimeException('No se reservó el documento');
+            $this->db->update('ventas',[
+                'estatus_factura'=>'Sustituyendo', 'factura_intent_at'=>date('Y-m-d H:i:s')
+            ],'id=? AND id_ferreteria=? AND id_sucursal=?',
+              [$id_venta,$this->id_ferreteria,$this->id_sucursal]);
             $this->db->commit();
-        } catch (Throwable $exception) {
+        } catch (Throwable $e) {
             $this->db->rollBack();
-            return ['estatus' => false, 'mensaje' => 'No se pudo guardar la solicitud antes de facturar.'];
+            return ['estatus'=>false,'mensaje'=>$e->getMessage()];
         }
 
-        // 7) Timbrar
-        $response = $client->facturar($clientId, $issuerId, $cfdiPayload, $deliveryOptions);
-
-        if (!$response['estatus']) {
-            $httpCode = (int)($response['http_code'] ?? 0);
-            if ($httpCode >= 400 && $httpCode < 500 && !in_array($httpCode, [408, 429], true)) {
-                $this->db->update('ventas', [
-                    'estatus_factura'   => 'Pendiente',
-                    'factura_date'      => null,
-                    'factura_issuer_id' => null
-                ], 'id = ? AND id_ferreteria = ? AND estatus_factura = ?', [$id_venta, $this->id_ferreteria, 'En proceso']);
-                return $response;
+        // Fuera de una transacción: Facturama puede tardar o fallar.
+        try {
+            $respuesta=$client->facturar(
+                (string)$this->id_ferreteria,(int)$venta['factura_issuer_id'],
+                $payload,$preparado['entrega']
+            );
+        } catch (Throwable $e) {
+            $respuesta=['estatus'=>false,'http_code'=>0,'mensaje'=>'Falla de comunicación con Facturama'];
+        }
+        if (empty($respuesta['estatus'])) {
+            $code=(int)($respuesta['http_code']??0);
+            $seguro=($code>=400 && $code<500 && !in_array($code,[408,409,429],true));
+            $this->db->update('cfdi_documentos',[
+                'estado'=>$seguro?'fallido':'incierto'
+            ],'id=? AND id_ferreteria=?',[$docId,$this->id_ferreteria]);
+            if ($seguro) {
+                $this->db->update('ventas',['estatus_factura'=>'Facturada'],
+                    'id=? AND id_ferreteria=? AND estatus_factura=?',
+                    [$id_venta,$this->id_ferreteria,'Sustituyendo']);
             }
-            $response['mensaje'] = 'No se pudo confirmar la emisión. Vuelve a intentar: se verificará antes de reenviar.';
-            return $response;
+            return [
+                'estatus'=>false,'requiere_revision'=>!$seguro,
+                'mensaje'=>$seguro
+                    ? ($respuesta['mensaje']??'Facturama rechazó el timbrado; no se generó la sustitución')
+                    : 'Resultado de timbrado incierto. NO generes otra factura; utiliza Revisar sustitución.'
+            ];
         }
+        return $this->completarEmisionSustituta($docId,(array)($respuesta['data']??[]));
+    }
 
-        return $this->finalizarFactura($id_venta, $folio, $response['data'], $correo);
+    /**
+     * Concilia un timeout de timbrado o muestra cancelaciones pendientes.
+     * Nunca reenvía automáticamente la petición de emisión.
+     */
+    public function revisarSustitucion(int $id_venta): array
+    {
+        $docs=$this->db->select(
+            "SELECT * FROM cfdi_documentos WHERE id_venta=? AND id_ferreteria=? AND id_sucursal=? AND relacion_tipo='04' AND estado IN ('emitiendo','incierto','pendiente_cancelacion','revision') ORDER BY version DESC LIMIT 1",
+            [$id_venta,$this->id_ferreteria,$this->id_sucursal]
+        );
+        if (!$docs) return ['estatus'=>false,'mensaje'=>'No existe una sustitución pendiente'];
+        $d=$docs[0];
+        if ($d['estado']==='pendiente_cancelacion' || $d['estado']==='revision') {
+            return ['estatus'=>true,'pendiente'=>true,'documento_id'=>$d['id'],
+                'mensaje'=>'La sustituta ya fue emitida, pero falta confirmar la cancelación del CFDI anterior. Verifica estado SAT/Facturama antes de solicitar otra cancelación.'];
+        }
+        if ($d['estado']==='emitiendo' &&
+            time()-strtotime((string)$d['fecha_intento'])<120) {
+            return ['estatus'=>false,'mensaje'=>'La emisión todavía podría estar procesándose. No reintentes el timbrado.'];
+        }
+        $client=new FacturamaClient();
+        $resultado=$client->buscarEmitidaPorFolio(
+            (string)$this->id_ferreteria,(int)$d['issuer_id'],
+            (string)$d['folio'],(string)$d['fecha_cfdi']
+        );
+        if (empty($resultado['estatus'])) {
+            return ['estatus'=>false,'mensaje'=>'No fue posible consultar Facturama. No vuelvas a timbrar todavía.'];
+        }
+        if (empty($resultado['data'])) {
+            return ['estatus'=>false,'requiere_revision'=>true,
+                'mensaje'=>'No se encontró el sustituto en la consulta. Antes de reenviar, verifica el portal/UUID y espera consistencia del proveedor.'];
+        }
+        return $this->completarEmisionSustituta((int)$d['id'],(array)$resultado['data']);
+    }
+
+    /** Primero persiste la sustituta; solo después intenta cancelar la anterior. */
+    private function completarEmisionSustituta(int $docId, array $respuesta): array
+    {
+        $idProveedor=(string)($respuesta['Id']??'');
+        $uuid=(string)($respuesta['TaxStamp']['Uuid']??'');
+        if (!$idProveedor || !preg_match(self::UUID_RE,$uuid)) {
+            $this->db->update('cfdi_documentos',['estado'=>'incierto'],
+                'id=? AND id_ferreteria=?',[$docId,$this->id_ferreteria]);
+            return ['estatus'=>false,'requiere_revision'=>true,
+                'mensaje'=>'Facturama respondió sin UUID o ID identificable. No reintentar sin consultar.'];
+        }
+        try {
+            $this->db->beginTransaction();
+            $rows=$this->db->select(
+                'SELECT * FROM cfdi_documentos WHERE id=? AND id_ferreteria=? AND id_sucursal=? FOR UPDATE',
+                [$docId,$this->id_ferreteria,$this->id_sucursal]
+            );
+            if (!$rows) throw new RuntimeException('Documento sustituto no localizado');
+            $d=$rows[0];
+            if (!in_array($d['estado'],['emitiendo','incierto'],true)) {
+                throw new RuntimeException('El documento ya fue procesado; revisa historial antes de continuar');
+            }
+            $ventas=$this->db->select(
+                'SELECT id,estatus_factura FROM ventas WHERE id=? AND id_ferreteria=? AND id_sucursal=? FOR UPDATE',
+                [$d['id_venta'],$this->id_ferreteria,$this->id_sucursal]
+            );
+            if (!$ventas || $ventas[0]['estatus_factura']!=='Sustituyendo') {
+                throw new RuntimeException('Estado de venta incompatible con sustitución');
+            }
+            $payload=json_decode((string)$d['payload_json'],true,512,JSON_THROW_ON_ERROR);
+            $receptor=$payload['Receiver']??[];
+            $this->db->update('cfdi_documentos',[
+                'estado'=>'pendiente_cancelacion','facturama_id'=>$idProveedor,
+                'uuid'=>strtoupper($uuid)
+            ],'id=? AND id_ferreteria=?',[$docId,$this->id_ferreteria]);
+            $this->db->update('cfdi_documentos',[
+                'estado'=>'cancelacion_pendiente','motivo_cancelacion'=>'01',
+                'uuid_sustituto'=>strtoupper($uuid)
+            ],'id=? AND id_ferreteria=?',[$d['documento_sustituido_id'],$this->id_ferreteria]);
+            $this->db->update('ventas',[
+                'estatus_factura'=>'Sustitucion pendiente',
+                'factura_id'=>$idProveedor, 'uuid_factura'=>strtoupper($uuid),
+                'factura_issuer_id'=>(int)$d['issuer_id'],
+                'factura_date'=>$d['fecha_cfdi'],
+                'fecha_factura'=>$this->fecha->obtenerFechaRegistro(),
+                'factura_payload'=>$d['payload_json'],
+                'factura_rfc'=>$receptor['Rfc']??null,
+                'factura_razon_social'=>$receptor['Name']??null,
+                'factura_codigo_postal'=>$receptor['TaxZipCode']??null,
+                'factura_regimen_fiscal'=>$receptor['FiscalRegime']??null,
+                'factura_uso_cfdi'=>$receptor['CfdiUse']??null,
+                'factura_correo'=>$d['correo'],
+                'factura_metodo_pago'=>$payload['PaymentMethod']??null,
+                'factura_forma_pago'=>$payload['PaymentForm']??null,
+                'factura_intent_at'=>null,
+                'factura_cancelacion_motivo'=>null,
+                'factura_cancelacion_uuid_sustituto'=>null,
+                'factura_cancelacion_fecha'=>null
+            ],'id=? AND id_ferreteria=? AND id_sucursal=?',
+              [$d['id_venta'],$this->id_ferreteria,$this->id_sucursal]);
+            $this->db->commit();
+        } catch (Throwable $e) {
+            $this->db->rollBack();
+            return ['estatus'=>false,'requiere_revision'=>true,
+                'mensaje'=>'La sustituta pudo timbrarse pero no se guardó correctamente. No reintentes: revisa registros.'];
+        }
+        return $this->solicitarCancelacionAnterior($docId);
+    }
+
+    /**
+     * Petición independiente de cancelación SAT: motivo 01 + UUID sustituto.
+     * Un resultado desconocido NO se interpreta como cancelación confirmada.
+     */
+    private function solicitarCancelacionAnterior(int $docId): array
+    {
+        $new=$this->db->select(
+            'SELECT * FROM cfdi_documentos WHERE id=? AND id_ferreteria=? AND id_sucursal=?',
+            [$docId,$this->id_ferreteria,$this->id_sucursal]
+        );
+        if (!$new) return ['estatus'=>false,'mensaje'=>'Sustituto no encontrado'];
+        $nuevo=$new[0];
+        $old=$this->db->select(
+            'SELECT * FROM cfdi_documentos WHERE id=? AND id_ferreteria=? AND id_sucursal=?',
+            [$nuevo['documento_sustituido_id'],$this->id_ferreteria,$this->id_sucursal]
+        );
+        if (!$old || empty($nuevo['uuid'])) return ['estatus'=>false,'mensaje'=>'Historial de sustitución incompleto'];
+        $anterior=$old[0];
+        try {
+            $resp=(new FacturamaClient())->cancelarCfdi(
+                (string)$this->id_ferreteria,(int)$anterior['issuer_id'],
+                (string)$anterior['facturama_id'],'01',(string)$nuevo['uuid']
+            );
+        } catch (Throwable $e) {
+            $resp=['estatus'=>false,'mensaje'=>'No se recibió confirmación de cancelación SAT'];
+        }
+        $estadoSat=(string)($resp['sat_status']??'unknown');
+        if (!empty($resp['estatus']) && $estadoSat==='canceled') {
+            try {
+                $this->db->beginTransaction();
+                $this->db->update('cfdi_documentos',[
+                    'estado'=>'cancelado','sat_status'=>'canceled',
+                    'fecha_cancelacion'=>date('Y-m-d H:i:s')
+                ],'id=? AND id_ferreteria=?',[$anterior['id'],$this->id_ferreteria]);
+                $this->db->update('cfdi_documentos',['estado'=>'emitido'],
+                    'id=? AND id_ferreteria=?',[$docId,$this->id_ferreteria]);
+                $this->db->update('ventas',['estatus_factura'=>'Facturada'],
+                    'id=? AND id_ferreteria=? AND id_sucursal=? AND uuid_factura=?',
+                    [$nuevo['id_venta'],$this->id_ferreteria,$this->id_sucursal,$nuevo['uuid']]);
+                $this->db->commit();
+            } catch (Throwable $e) {
+                $this->db->rollBack();
+                return ['estatus'=>false,'requiere_revision'=>true,'mensaje'=>'SAT confirmó cancelación, pero no se pudo sincronizar la BD.'];
+            }
+            return ['estatus'=>true,'pendiente'=>false,'mensaje'=>'Factura sustituida y original cancelada correctamente','uuid'=>$nuevo['uuid']];
+        }
+        // pending/active/timeout/error -> NO cerrar sustitución.
+        $this->db->update('cfdi_documentos',[
+            'sat_status'=>$estadoSat,
+            'estado'=>'pendiente_cancelacion'
+        ],'id=? AND id_ferreteria=?',[$docId,$this->id_ferreteria]);
+        return ['estatus'=>true,'pendiente'=>true,'uuid'=>$nuevo['uuid'],
+            'mensaje'=>'La factura sustituta ya se timbró. La cancelación del CFDI original sigue pendiente o sin confirmar; revisa su estado SAT.'];
     }
 
     /** Marca la venta como Facturada y envía documentos si hay correo. */
     private function finalizarFactura(int $id_venta, string $folio, array $providerData, string $correo): array
     {
         $taxStamp  = $providerData['TaxStamp'] ?? [];
-        $facturaId = $providerData['Id'] ?? null;
-        $uuid      = is_array($taxStamp) ? ($taxStamp['Uuid'] ?? null) : null;
-
-        $this->db->update('ventas', [
-            'estatus_factura' => 'Facturada',
-            'factura_id'      => $facturaId,
-            'uuid_factura'    => $uuid,
-            'fecha_factura'   => $this->fecha->obtenerFechaRegistro()
-        ], 'id = ? AND id_ferreteria = ?', [$id_venta, $this->id_ferreteria]);
+        $facturaId = (string)($providerData['Id'] ?? '');
+        $uuid = is_array($taxStamp) ? (string)($taxStamp['Uuid'] ?? '') : '';
+        if (!$facturaId || !preg_match(self::UUID_RE, $uuid)) {
+            return ['estatus'=>false, 'mensaje'=>'Facturama no devolvió ID y UUID verificables; revisar emisión antes de reintentar'];
+        }
+        try {
+            $this->db->beginTransaction();
+            $vs = $this->db->select(
+                'SELECT * FROM ventas WHERE id=? AND id_ferreteria=? AND id_sucursal=? FOR UPDATE',
+                [$id_venta,$this->id_ferreteria,$this->id_sucursal]
+            );
+            if (!$vs) throw new RuntimeException('Venta no localizada');
+            $v=$vs[0];
+            $exist=$this->db->select('SELECT id FROM cfdi_documentos WHERE id_venta=? AND `version`=1',[$id_venta]);
+            if (!$exist) {
+                $this->db->insert('cfdi_documentos', [
+                    'id_venta'=>$id_venta, 'id_ferreteria'=>$this->id_ferreteria,
+                    'id_sucursal'=>$this->id_sucursal, 'version'=>1, 'tipo_cfdi'=>'I',
+                    'folio'=>$folio, 'fecha_cfdi'=>$v['factura_date'],
+                    'issuer_id'=>(int)$v['factura_issuer_id'],
+                    'facturama_id'=>$facturaId, 'uuid'=>strtoupper($uuid),
+                    'estado'=>'emitido', 'correo'=>$correo,
+                    'payload_json'=>$v['factura_payload'] ?? null
+                ]);
+            }
+            $this->db->update('ventas', [
+                'estatus_factura'=>'Facturada', 'factura_id'=>$facturaId,
+                'uuid_factura'=>strtoupper($uuid),
+                'fecha_factura'=>$this->fecha->obtenerFechaRegistro()
+            ], 'id=? AND id_ferreteria=? AND id_sucursal=?',
+                [$id_venta,$this->id_ferreteria,$this->id_sucursal]);
+            $this->db->commit();
+        } catch (Throwable $e) {
+            $this->db->rollBack();
+            return ['estatus'=>false, 'mensaje'=>'Factura posiblemente timbrada: fallo al guardar histórico CFDI; NO reintentar emisión automáticamente'];
+        }
 
         $emailSent = null;
         $message   = 'Factura emitida con éxito';
@@ -751,6 +1105,28 @@ class Venta extends Datatable
         return $response;
     }
 
+    /** Descarga una versión concreta; nunca se basa en ventas.factura_id. */
+    public function descargarDocumento(int $idDocumento, string $formato): array
+    {
+        if (!in_array($formato,['pdf','xml'],true)) {
+            return ['estatus'=>false,'mensaje'=>'Formato inválido'];
+        }
+        $docs=$this->db->select(
+            'SELECT facturama_id,issuer_id,estado FROM cfdi_documentos
+             WHERE id=? AND id_ferreteria=? AND id_sucursal=?',
+            [$idDocumento,$this->id_ferreteria,$this->id_sucursal]
+        );
+        if (!$docs || empty($docs[0]['facturama_id'])) {
+            return ['estatus'=>false,'mensaje'=>'Documento no disponible'];
+        }
+        return (new FacturamaClient())->descargarCfdi(
+            (string)$this->id_ferreteria,
+            (int)$docs[0]['issuer_id'],
+            (string)$docs[0]['facturama_id'],
+            $formato
+        );
+    }
+
     public function descargarFactura(int $id_venta, string $formato): array
     {
         if (!in_array($formato, ['pdf', 'xml'], true)) {
@@ -761,8 +1137,8 @@ class Venta extends Datatable
              FROM ventas WHERE id = ? AND id_ferreteria = ? AND id_sucursal = ?",
             [$id_venta, $this->id_ferreteria, $this->id_sucursal]
         );
-        if (empty($rows) || $rows[0]['estatus_factura'] !== 'Facturada') {
-            return ['estatus' => false, 'mensaje' => 'La venta todavía no tiene una factura emitida'];
+        if (empty($rows) || !in_array($rows[0]['estatus_factura'], ['Facturada','Sustitucion pendiente'], true)) {
+            return ['estatus' => false, 'mensaje' => 'La venta no tiene una factura descargable'];
         }
         if (empty($rows[0]['factura_id']) || (int)($rows[0]['factura_issuer_id'] ?? 0) <= 0) {
             return ['estatus' => false, 'mensaje' => 'La factura no tiene un identificador de descarga válido'];
@@ -782,6 +1158,9 @@ class Venta extends Datatable
     }
     if (!in_array($motivo, ['01', '02', '03'], true)) {
         return ['estatus' => false, 'mensaje' => 'Motivo de cancelación inválido'];
+    }
+    if ($motivo === '01') {
+        return ['estatus'=>false,'mensaje'=>'Para el motivo 01 utiliza Corregir / Sustituir CFDI. Pikero debe emitir el nuevo primero y relacionarlo automáticamente.'];
     }
     if ($motivo === '01') {
         if (!preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/', $uuidSustituto)) {
@@ -808,8 +1187,13 @@ class Venta extends Datatable
         return ['estatus' => false, 'mensaje' => 'La cancelación ya fue solicitada y espera respuesta del receptor'];
     }
     if ($venta['estatus_factura'] !== 'Facturada') {
-        return ['estatus' => false, 'mensaje' => 'La venta todavía no tiene una factura emitida'];
+        return ['estatus' => false, 'mensaje' => 'La venta no está en estado Facturada; termina o revisa primero la sustitución en curso'];
     }
+    $pendiente = $this->db->select(
+      "SELECT id FROM cfdi_documentos WHERE id_venta=? AND relacion_tipo='04' AND estado IN ('emitiendo','incierto','pendiente_cancelacion','revision') LIMIT 1",
+      [$id_venta]
+    );
+    if ($pendiente) return ['estatus'=>false,'mensaje'=>'Existe una sustitución pendiente; usa el flujo de sustitución'];
     if (empty($venta['factura_id']) || (int)($venta['factura_issuer_id'] ?? 0) <= 0) {
         return ['estatus' => false, 'mensaje' => 'La factura no tiene un identificador/emisor válido'];
     }
@@ -844,6 +1228,16 @@ class Venta extends Datatable
         [$nuevoEstatus, $motivo, $uuidSustituto ?: null, $id_venta, $this->id_ferreteria, $this->id_sucursal]
     );
 
+    if (in_array($nuevoEstatus, ['Cancelada','Cancelacion pendiente'], true)) {
+        $this->db->update('cfdi_documentos', [
+            'estado'=>$nuevoEstatus==='Cancelada' ? 'cancelado' : 'cancelacion_pendiente',
+            'motivo_cancelacion'=>$motivo,
+            'uuid_sustituto'=>$uuidSustituto ?: null,
+            'sat_status'=>$resp['sat_status'] ?? null,
+            'fecha_cancelacion'=>$nuevoEstatus==='Cancelada' ? date('Y-m-d H:i:s') : null
+        ], 'id_venta=? AND id_ferreteria=? AND id_sucursal=? AND facturama_id=?',
+            [$id_venta,$this->id_ferreteria,$this->id_sucursal,$venta['factura_id']]);
+    }
     return $resp;
 }
 
@@ -904,6 +1298,14 @@ class Venta extends Datatable
 
         // 1) Antes de cancelar: ¿La venta esta facturada?
         $estatusFactura = $venta['estatus_factura'] ?? 'Pendiente';
+        if (!in_array($estatusFactura, ['Pendiente','Cancelada','En proceso'], true)) {
+            return ['estatus'=>false,'mensaje'=>'Primero debe concluir la operación fiscal del ticket antes de cancelarlo'];
+        }
+
+        if (in_array($estatusFactura,['Sustituyendo','Sustitucion pendiente'],true)) {
+            return ['estatus'=>false,'mensaje'=>'No puedes cancelar el ticket con una sustitución CFDI en curso'];
+        }
+
 
 // Ya facturada: bloquear
 if ($estatusFactura === 'Facturada') {
