@@ -121,6 +121,7 @@ class Venta extends Datatable
                     COALESCE(dv.tipo_iva_venta, p.tipo_iva_venta) AS tipo_iva_facturacion,
                     COALESCE(dv.precio_venta_incluye_iva, p.precio_venta_incluye_iva) AS precio_incluye_iva_facturacion,
                     COALESCE(dv.objeto_impuesto, p.objeto_impuesto) AS objeto_impuesto_facturacion,
+                    COALESCE(dv.sugerir_retencion_isr_resico, p.sugerir_retencion_isr_resico, 0) AS sugerir_retencion_isr_resico,
                     CASE WHEN dv.tipo_iva_venta IS NULL THEN 1 ELSE 0 END AS fiscal_heredado
              FROM detalle_ventas dv
              INNER JOIN productos p ON p.id = dv.id_producto
@@ -199,6 +200,7 @@ class Venta extends Datatable
                     COALESCE(dv.tipo_iva_venta, p.tipo_iva_venta) AS tipo_iva_facturacion,
                     COALESCE(dv.precio_venta_incluye_iva, p.precio_venta_incluye_iva) AS precio_incluye_iva_facturacion,
                     COALESCE(dv.objeto_impuesto, p.objeto_impuesto) AS objeto_impuesto_facturacion,
+                    COALESCE(dv.sugerir_retencion_isr_resico, p.sugerir_retencion_isr_resico, 0) AS sugerir_retencion_isr_resico,
                     CASE WHEN dv.tipo_iva_venta IS NULL THEN 1 ELSE 0 END AS fiscal_heredado
          FROM detalle_ventas dv
          INNER JOIN productos p ON p.id = dv.id_producto
@@ -235,6 +237,48 @@ class Venta extends Datatable
              FROM cfdi_documentos WHERE id_venta=? AND id_ferreteria=? AND id_sucursal=? ORDER BY version ASC',
             [$id_venta,$this->id_ferreteria,$this->id_sucursal]
         );
+        // Precargar, por índice de partida, las tasas y retenciones realmente
+        // timbradas en la última versión. No consultar el producto actual para ello.
+        $configActual = [];
+        if (!empty($venta[0]['uuid_factura'])) {
+            $actual = $this->db->select(
+                'SELECT payload_json FROM cfdi_documentos WHERE id_venta=? AND id_ferreteria=? AND uuid=? LIMIT 1',
+                [$id_venta, $this->id_ferreteria, strtoupper((string)$venta[0]['uuid_factura'])]
+            );
+            $payloadActual = json_decode((string)($actual[0]['payload_json'] ?? ''), true);
+            if (is_array($payloadActual) && isset($payloadActual['Items']) && is_array($payloadActual['Items'])) {
+                foreach ($items as $idx => $itemBD) {
+                    $conceptoActual = $payloadActual['Items'][$idx] ?? null;
+                    if (!is_array($conceptoActual)) continue;
+                    $tipo = (string)($itemBD['tipo_iva_facturacion'] ?? '');
+                    if (($conceptoActual['TaxObject'] ?? '') === '01') $tipo = 'no_objeto';
+                    $tieneTrasladoIVA = false;
+                    foreach (($conceptoActual['Taxes'] ?? []) as $tax) {
+                        if (in_array(($tax['Name'] ?? ''), ['IVA', 'IVA Exento'], true)
+                            && empty($tax['IsRetention'])) $tieneTrasladoIVA = true;
+                    }
+                    if (($conceptoActual['TaxObject'] ?? '') === '02' && !$tieneTrasladoIVA) {
+                        $tipo = 'sin_traslado_iva';
+                    }
+                    foreach (($conceptoActual['Taxes'] ?? []) as $tax) {
+                        if (($tax['Name'] ?? '') === 'IVA Exento') $tipo = 'exento';
+                        if (($tax['Name'] ?? '') === 'IVA' && empty($tax['IsRetention'])) {
+                            $tipo = (string)(float)($tax['Rate'] ?? 0);
+                        }
+                    }
+                    $tieneISR = false;
+                    foreach (($conceptoActual['Taxes'] ?? []) as $tax) {
+                        if (($tax['Name'] ?? '') === 'ISR' && !empty($tax['IsRetention'])
+                            && abs((float)($tax['Rate'] ?? 0) - 0.0125) < 0.0000001) {
+                            $tieneISR = true;
+                        }
+                    }
+                    $configActual[(string)$itemBD['id']] = [
+                        'tipo_iva' => $tipo, 'retencion_isr_resico' => $tieneISR
+                    ];
+                }
+            }
+        }
         return [
             'estatus' => true,
             'mensaje' => 'OK',
@@ -243,7 +287,8 @@ class Venta extends Datatable
                 'items' => $items,
                 'abonos' => $abonos,
                 'formas_pago' => $formas_pago,
-                'documentos_cfdi' => $documentos
+                'documentos_cfdi' => $documentos,
+                'impuestos_cfdi_vigente' => $configActual
             ]
         ];
     }
@@ -485,6 +530,8 @@ class Venta extends Datatable
         }
 
         // 7) Timbrar
+       /*  print_r($cfdiPayload); // Debug: Verificar el payload antes de enviar
+        die(); */
         $response = $client->facturar($clientId, $issuerId, $cfdiPayload, $deliveryOptions);
 
         if (!$response['estatus']) {
@@ -555,8 +602,31 @@ class Venta extends Datatable
         );
         if (!$items) return ['estatus'=>false, 'mensaje'=>'Venta sin conceptos'];
 
+        $ajustesFiscal = $data['impuestos_partidas'] ?? [];
+        if (!is_array($ajustesFiscal)) {
+            return ['estatus'=>false, 'mensaje'=>'La configuración de impuestos debe ser un objeto'];
+        }
+        $issuerRfc = strtoupper(trim((string)($issuer['rfc'] ?? $issuer['Rfc'] ?? '')));
+        $issuerRegimen = trim((string)($issuer['fiscal_regime'] ?? $issuer['FiscalRegime'] ?? $issuer['regimen_fiscal'] ?? ''));
+        if ($issuerRegimen === '' && $issuerRfc !== '') {
+            // Respaldo seguro solamente cuando el RFC del emisor coincida con el de la empresa.
+            $empresaEmisor = $this->db->select(
+                'SELECT regimen_fiscal FROM ferreterias WHERE id=? AND UPPER(rfc)=? LIMIT 1',
+                [$this->id_ferreteria, $issuerRfc]
+            );
+            $issuerRegimen = trim((string)($empresaEmisor[0]['regimen_fiscal'] ?? ''));
+        }
+        $idsValidos = array_fill_keys(array_map('strval', array_column($items, 'id')), true);
+        foreach (array_keys($ajustesFiscal) as $idDetalle) {
+            if (!isset($idsValidos[(string)$idDetalle]) || !is_array($ajustesFiscal[$idDetalle])) {
+                return ['estatus'=>false, 'mensaje'=>'Configuración de impuestos no corresponde a la venta'];
+            }
+        }
+
         $cfdiItems = [];
         $sumaTicketC = 0;
+        $sumaCfdiC = 0;
+        $sumaRetencionIsr = 0.0;
         $sumaFiscalC = 0;
         $sumaSubtotales = 0.0;
         $sumaDescuentos = 0.0;
@@ -564,8 +634,26 @@ class Venta extends Datatable
         foreach ($items as $item) {
             $quantity = (float)$item['cantidad'];
             if ($quantity <= 0) return ['estatus'=>false,'mensaje'=>'Cantidad inválida'];
-            $tipoIva = strtolower(trim((string)$item['tipo_iva_cfdi']));
-            $objeto = (string)$item['objeto_cfdi'];
+            $ajuste = $ajustesFiscal[(string)$item['id']] ?? [];
+            $tipoOriginal = strtolower(trim((string)$item['tipo_iva_cfdi']));
+            $tipoIva = strtolower(trim((string)($ajuste['tipo_iva'] ?? $tipoOriginal)));
+            if (!in_array($tipoIva, ['0','0.08','0.16','exento','no_objeto','sin_traslado_iva'], true)) {
+                return ['estatus'=>false, 'mensaje'=>'Tratamiento de IVA fuera de catálogo'];
+            }
+            // Cuando el administrador corrige una tasa antes de facturar,
+            // no se cambia detalle_ventas; el CFDI se calcula desde el total cobrado.
+            $cambioTipo = $tipoIva !== $tipoOriginal;
+            $objeto = $cambioTipo
+                ? ($tipoIva === 'no_objeto' ? '01' : '02')
+                : (string)$item['objeto_cfdi'];
+            $retenIsr = ($ajuste['retencion_isr_resico'] ?? false) === true
+                || ($ajuste['retencion_isr_resico'] ?? false) === 1;
+            if ($retenIsr) {
+                if ($objeto !== '02' || $issuerRegimen !== '626'
+                    || strlen($issuerRfc) !== 13 || strlen($rfc) !== 12) {
+                    return ['estatus'=>false, 'mensaje'=>'ISR 1.25% requiere emisor persona física RESICO 626, receptor persona moral y objeto de impuesto 02. Verifica el régimen del emisor en el microservicio.'];
+                }
+            }
             if (!in_array($objeto, ['01','02'], true)) return ['estatus'=>false,'mensaje'=>'ObjetoImp no soportado'];
             if ($tipoIva === 'no_objeto') {
                 if ($objeto !== '01') return ['estatus'=>false,'mensaje'=>'Impuesto inconsistente'];
@@ -573,6 +661,11 @@ class Venta extends Datatable
             } elseif ($tipoIva === 'exento') {
                 if ($objeto !== '02') return ['estatus'=>false,'mensaje'=>'Impuesto inconsistente'];
                 $factorTipo = 'Exento'; $tasa = 0.0;
+            } elseif ($tipoIva === 'sin_traslado_iva') {
+                if ($objeto !== '02' || !$retenIsr) {
+                    return ['estatus'=>false,'mensaje'=>'Sin traslado IVA requiere la retención ISR en la partida'];
+                }
+                $factorTipo = 'SinTraslado'; $tasa = 0.0;
             } elseif (in_array($tipoIva, ['0','0.08','0.16'], true)) {
                 if ($objeto !== '02') return ['estatus'=>false,'mensaje'=>'Impuesto inconsistente'];
                 $factorTipo = 'Tasa'; $tasa = (float)$tipoIva;
@@ -582,27 +675,41 @@ class Venta extends Datatable
             $incluyeIva = (int)$item['incluye_iva_cfdi'] === 1;
             $factor = $factorTipo === 'Tasa' ? 1 + $tasa : 1.0;
             $precio = (float)$item['precio'];
-            $unitPrice = round($incluyeIva ? $precio / $factor : $precio, 6);
+            $descuentoComercial = round((float)$item['descuento_producto'] + (float)$item['descuento_general'], 2);
+            if ($cambioTipo) {
+                $brutoTicket = isset($item['importe_bruto']) && $item['importe_bruto'] !== null
+                    ? (float)$item['importe_bruto']
+                    : (float)$item['importe'] + $descuentoComercial;
+                $unitPrice = round($brutoTicket / $quantity / $factor, 6);
+            } else {
+                $unitPrice = round($incluyeIva ? $precio / $factor : $precio, 6);
+            }
             $subtotal = round($unitPrice * $quantity, 6);
 
-            $descuentoComercial = round((float)$item['descuento_producto'] + (float)$item['descuento_general'], 2);
             $descuentoFiscal = round($descuentoComercial / $factor, 6);
             if ($descuentoFiscal < 0 || $descuentoFiscal > $subtotal) {
                 return ['estatus'=>false,'mensaje'=>'Descuento fiscal inválido'];
             }
-            $base = round($subtotal - $descuentoFiscal, 6);
-            $iva = $factorTipo === 'Tasa' ? round($base * $tasa, 6) : 0.0;
-            $totalItem = round($base + $iva, 2);
+          $base = round($subtotal - $descuentoFiscal, 6);
+            $iva = $factorTipo === 'Tasa' ? round($base * $tasa, 2) : 0.0; // Redondear el IVA a 2 decimales exactos
+            $isr = $retenIsr ? round($base * 0.0125, 2) : 0.0;           // Redondear el ISR a 2 decimales exactos
+            
+            $totalComercialItem = round($base + $iva, 2);
+            
+            // Forzar que el total de la partida cuadre aritméticamente con los impuestos ya redondeados:
+            $totalItem = round($base + $iva - $isr, 2);
             $importeTicket = round((float)$item['importe'], 2);
             $sumaTicketC += (int)round($importeTicket * 100);
-            $sumaFiscalC += (int)round($totalItem * 100);
+            $sumaFiscalC += (int)round($totalComercialItem * 100);
+            $sumaCfdiC += (int)round($totalItem * 100);
+            $sumaRetencionIsr += $isr;
             $sumaSubtotales += $subtotal;
             $sumaDescuentos += $descuentoFiscal;
             if ($factorTipo === 'Tasa') {
                 $key = number_format($tasa, 6, '.', '');
                 $impuestosPorTasa[$key] = ($impuestosPorTasa[$key] ?? 0.0) + $iva;
             }
-            if ((int)round($totalItem * 100) !== (int)round($importeTicket * 100)) {
+            if ((int)round($totalComercialItem * 100) !== (int)round($importeTicket * 100)) {
                 return ['estatus'=>false,'mensaje'=>'Descuadre fiscal en partida ' . ($item['nombre'] ?? 'sin nombre') . '. Revisar redondeos antes de timbrar.'];
             }
 
@@ -626,15 +733,21 @@ class Venta extends Datatable
             if ($descuentoFiscal > 0) {
                 $concepto['Discount'] = $descuentoFiscal;
             }
-            if ($factorTipo === 'Exento') {
+           if ($factorTipo === 'Exento') {
                 $concepto['Taxes'] = [[
-                    'Name'=>'IVA Exento', 'Base'=>$base, 'IsRetention'=>false
+                    'Name'=>'IVA Exento', 'Base'=>round($base, 2), 'IsRetention'=>false
                 ]];
             } elseif ($factorTipo === 'Tasa') {
                 $concepto['Taxes'] = [[
-                    'Name'=>'IVA', 'Rate'=>$tasa, 'Base'=>$base,
-                    'Total'=>$iva, 'IsRetention'=>false, 'IsQuota'=>false
+                    'Name'=>'IVA', 'Rate'=>$tasa, 'Base'=>round($base, 2),
+                    'Total'=>round($iva, 2), 'IsRetention'=>false, 'IsQuota'=>false
                 ]];
+            }
+            if ($retenIsr) {
+                $concepto['Taxes'][] = [
+                    'Name'=>'ISR', 'Rate'=>0.0125, 'Base'=>round($base, 2),
+                    'Total'=>round($isr, 2), 'IsRetention'=>true, 'IsQuota'=>false
+                ];
             }
             $cfdiItems[] = $concepto;
         }
@@ -642,13 +755,14 @@ class Venta extends Datatable
         foreach ($impuestosPorTasa as $importeTasa) {
             $ivaResumen += round($importeTasa, 2);
         }
+        $isrResumen = round($sumaRetencionIsr, 2);
         $totalFiscalResumen = round(
-            round($sumaSubtotales, 2) - round($sumaDescuentos, 2) + round($ivaResumen, 2),
-            2
+            round($sumaSubtotales, 2) - round($sumaDescuentos, 2)
+            + round($ivaResumen, 2) - $isrResumen, 2
         );
         if ($sumaTicketC !== (int)round((float)$venta['total'] * 100)
             || $sumaFiscalC !== $sumaTicketC
-            || (int)round($totalFiscalResumen * 100) !== $sumaTicketC) {
+            || (int)round($totalFiscalResumen * 100) !== $sumaCfdiC) {
             return ['estatus' => false, 'mensaje' =>
                 'La suma fiscal de partidas, descuentos e impuestos no coincide con la venta. Revisa redondeos antes de timbrar.'];
         }
@@ -725,7 +839,12 @@ class Venta extends Datatable
             'rfc'=>$rfc, 'razon_social'=>$razon_social,
             'codigo_postal'=>$codigo_postal, 'regimen_fiscal'=>$regimen_fiscal,
             'uso_cfdi'=>$uso_cfdi, 'metodo_pago'=>$paymentMethod,
-            'forma_pago'=>$paymentForm
+            'forma_pago'=>$paymentForm,
+            'resumen_fiscal'=>[
+                'total_venta'=>(float)$venta['total'],
+                'retencion_isr'=>$isrResumen,
+                'total_cfdi'=>$totalFiscalResumen
+            ]
         ];
     }
 

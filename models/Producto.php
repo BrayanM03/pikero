@@ -368,7 +368,7 @@ class Producto extends Datatable
 
         $sql = "SELECT p.id, p.codigo, p.nombre, p.precio_venta, p.precio_compra,
                    p.tipo_iva_venta, p.precio_venta_incluye_iva,
-                   p.objeto_impuesto, p.clave_sat, p.codigo_unidad_sat,
+                   p.objeto_impuesto, p.sugerir_retencion_isr_resico, p.clave_sat, p.codigo_unidad_sat,
                    u.abreviatura AS unidad,
                    COALESCE(inv.existencia, 0) AS stock
             FROM {$this->tabla} p
@@ -455,6 +455,11 @@ class Producto extends Datatable
             );
         }
 
+        $sugerirIsr = filter_var(
+            $data['sugerir_retencion_isr_resico'] ?? false,
+            FILTER_VALIDATE_BOOLEAN
+        ) ? 1 : 0;
+
         $tipoIvaVenta = (string) (
             $data['tipo_iva_venta'] ?? '0.16'
         );
@@ -493,6 +498,7 @@ class Producto extends Datatable
 
             'tipo_iva_venta' => $tipoIvaVenta,
             'precio_venta_incluye_iva' => $precioVentaIncluyeIva,
+            'sugerir_retencion_isr_resico' => $sugerirIsr,
         ];
     }
 }

@@ -63,6 +63,32 @@ function modalProducto(values = {}, id = null) {
           </div>
         </div>
 
+        <div class="row mt-2">
+          <div class="col-md-6 mb-3">
+            <label class="form-label">Tratamiento IVA de venta</label>
+            <select id="prod_tipo_iva_venta" class="form-select">
+              ${[['0.16','IVA 16%'], ['0.08','IVA 8%'], ['0','IVA 0%'],
+                ['exento','Exento'], ['no_objeto','No objeto']].map(([v,l]) =>
+                `<option value="${v}" ${String(values.tipo_iva_venta ?? '0.16') === v ? 'selected' : ''}>${l}</option>`).join('')}
+            </select>
+          </div>
+          <div class="col-md-6 mb-3">
+            <label class="form-label">Precio de venta</label>
+            <select id="prod_precio_venta_incluye_iva" class="form-select">
+              <option value="1" ${Number(values.precio_venta_incluye_iva ?? 1) === 1 ? 'selected' : ''}>IVA incluido</option>
+              <option value="0" ${Number(values.precio_venta_incluye_iva ?? 1) === 0 ? 'selected' : ''}>IVA aparte</option>
+            </select>
+          </div>
+          <div class="col-12 mb-3">
+            <label class="form-check-label">
+              <input id="prod_sugerir_ret_isr" class="form-check-input" type="checkbox"
+                ${Number(values.sugerir_retencion_isr_resico ?? 0) === 1 ? 'checked' : ''}>
+              Sugerir retención ISR RESICO 1.25% al facturar
+            </label>
+            <small class="d-block text-muted">Solo sugerencia: depende del emisor PF RESICO y receptor persona moral; no afecta el ticket.</small>
+          </div>
+        </div>
+
         <div class="row">
           <div class="col-md-4 mb-3">
             <label class="form-label">Categoría</label>
@@ -118,12 +144,23 @@ function modalProducto(values = {}, id = null) {
         return false;
       }
 
+      const tipoIvaProd = document.getElementById('prod_tipo_iva_venta').value;
+      const objetoProd = document.getElementById('prod_objeto_impuesto').value;
+      if ((tipoIvaProd === 'no_objeto' && objetoProd !== '01') ||
+          (tipoIvaProd !== 'no_objeto' && objetoProd !== '02')) {
+        Swal.showValidationMessage('Objeto 01 para no objeto, u objeto 02 para el IVA aplicable.');
+        return false;
+      }
+
       const payload = {
         id,
         codigo: document.getElementById('prod_codigo').value.trim(),
         clave_sat: document.getElementById('prod_clave_sat').value.trim(),
         codigo_unidad_sat: document.getElementById('prod_codigo_unidad_sat').value.trim(),
         objeto_impuesto: document.getElementById('prod_objeto_impuesto').value,
+        tipo_iva_venta: document.getElementById('prod_tipo_iva_venta').value,
+        precio_venta_incluye_iva: document.getElementById('prod_precio_venta_incluye_iva').value,
+        sugerir_retencion_isr_resico: document.getElementById('prod_sugerir_ret_isr').checked ? 1 : 0,
         nombre,
         id_categoria: document.getElementById('prod_categoria').value,
         id_marca: document.getElementById('prod_marca').value,

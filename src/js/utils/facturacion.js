@@ -17,71 +17,88 @@ function mostrarCargando(titulo, texto = 'Por favor espera...') {
     didOpen: () => Swal.showLoading() });
 }
 
-/** Vista previa: imita el algoritmo de Venta::facturar(). NO es cálculo fiscal autoritativo. */
-function calcularConcepto(item) {
+/** Vista previa orientativa; PHP es quien reconstruye y valida el CFDI. */
+function calcularConcepto(item, fiscal = {}) {
   const cantidad = Number(item.cantidad);
   const precio = Number(item.precio);
   const descProducto = Number(item.descuento_producto ?? 0);
   const descGeneral = Number(item.descuento_general ?? 0);
   const importeTicket = Number(item.importe);
-  const objeto = String(item.objeto_impuesto_facturacion ?? item.objeto_impuesto ?? '');
-  const tipo = String(item.tipo_iva_facturacion ?? item.tipo_iva_venta ?? '').toLowerCase();
+  const original = String(item.tipo_iva_facturacion ?? item.tipo_iva_venta ?? '').toLowerCase();
+  const tipo = String(fiscal.tipo_iva ?? original).toLowerCase();
   const incluye = Number(item.precio_incluye_iva_facturacion ?? item.precio_venta_incluye_iva);
+  const aplicarISR = fiscal.retencion_isr_resico === true;
+  const objeto = tipo !== original
+    ? (tipo === 'no_objeto' ? '01' : '02')
+    : String(item.objeto_impuesto_facturacion ?? item.objeto_impuesto ?? '');
 
   if (![cantidad, precio, descProducto, descGeneral, importeTicket].every(Number.isFinite)
       || cantidad <= 0 || precio < 0 || descProducto < 0 || descGeneral < 0
       || importeTicket < 0 || ![0, 1].includes(incluye)) {
-    throw new Error('Datos de precio, cantidad o descuento incompletos');
+    throw new Error('Datos de precio o descuento incompletos');
   }
-  if (!['01', '02'].includes(objeto)) throw new Error('Objeto de impuesto no soportado');
-  if (tipo === 'no_objeto' && objeto !== '01') throw new Error('No objeto debe tener clave 01');
-  if (tipo !== 'no_objeto' && objeto !== '02') throw new Error('Objeto de impuesto incompatible');
-  if (!['0', '0.08', '0.16', 'exento', 'no_objeto'].includes(tipo)) {
-    throw new Error('Tasa o tipo IVA no soportado');
+  if (!['0', '0.08', '0.16', 'exento', 'no_objeto', 'sin_traslado_iva'].includes(tipo)) {
+    throw new Error('Tipo de IVA no soportado');
+  }
+  if (tipo === 'no_objeto' && objeto !== '01') throw new Error('ObjetoImp incompatible');
+  if (tipo !== 'no_objeto' && objeto !== '02') throw new Error('ObjetoImp incompatible');
+  if (tipo === 'sin_traslado_iva' && !aplicarISR) throw new Error('Sin traslado IVA requiere retención ISR');
+  if (aplicarISR && objeto !== '02') {
+    throw new Error('Para retener ISR el concepto debe ser objeto 02; selecciona IVA 0%, exento o tasa válida');
   }
 
-  const tasa = ['exento', 'no_objeto'].includes(tipo) ? 0 : Number(tipo);
+  const tasa = ['exento', 'no_objeto', 'sin_traslado_iva'].includes(tipo) ? 0 : Number(tipo);
   const factor = 1 + tasa;
-  const precioFiscal = redondear(incluye ? precio / factor : precio, 6);
+  const descuentoComercial = descProducto + descGeneral;
+  const brutoTicket = Number(item.importe_bruto ?? (importeTicket + descuentoComercial));
+  const precioFiscal = tipo !== original
+    ? redondear(brutoTicket / cantidad / factor, 6)
+    : redondear(incluye ? precio / factor : precio, 6);
   const subtotalFiscal = redondear(precioFiscal * cantidad, 6);
-  // Ambos descuentos son comerciales: IVA incluido incluso si el precio de catálogo no lo incluye.
-  const descuentoFiscal = redondear((descProducto + descGeneral) / factor, 6);
-  if (descuentoFiscal > subtotalFiscal) throw new Error('Descuento mayor al subtotal');
+  const descuentoFiscal = redondear(descuentoComercial / factor, 6);
+  if (descuentoFiscal > subtotalFiscal) throw new Error('Descuento mayor que el subtotal');
   const baseFiscal = redondear(subtotalFiscal - descuentoFiscal, 6);
-  const impuesto = !['exento', 'no_objeto'].includes(tipo)
+  const iva = !['exento', 'no_objeto', 'sin_traslado_iva'].includes(tipo)
     ? redondear(baseFiscal * tasa, 6) : 0;
-  const totalFiscal = redondear(baseFiscal + impuesto, 2);
-  if (aCentavos(totalFiscal) !== aCentavos(importeTicket)) {
-    throw new Error(`Importe fiscal ${moneda(totalFiscal)} ≠ ticket ${moneda(importeTicket)}`);
+  const isr = aplicarISR ? redondear(baseFiscal * 0.0125, 6) : 0;
+  const totalComercial = redondear(baseFiscal + iva, 2);
+  const totalCfdi = redondear(baseFiscal + iva - isr, 2);
+  if (aCentavos(totalComercial) !== aCentavos(importeTicket)) {
+    throw new Error(`Importe comercial ${moneda(totalComercial)} ≠ ticket ${moneda(importeTicket)}`);
   }
   return { producto: item.producto, cantidad, precioFiscal, subtotalFiscal,
-    descuentoFiscal, baseFiscal, impuesto, totalFiscal, objeto, tipo, tasa,
-    heredado: Number(item.fiscal_heredado) === 1 };
+    descuentoFiscal, baseFiscal, iva, isr, totalComercial, totalCfdi,
+    objeto, tipo, tasa, aplicarISR, heredado: Number(item.fiscal_heredado) === 1 };
 }
 
-function calcularFactura(items, venta) {
+function calcularFactura(items, venta, config = {}) {
   if (!items.length) throw new Error('La venta no contiene partidas');
   const partidas = items.map((it) => {
-    try { return calcularConcepto(it); }
+    try { return calcularConcepto(it, config[String(it.id)] || {}); }
     catch (e) { throw new Error(`${it.producto || 'Artículo'}: ${e.message}`); }
   });
   const subtotal = redondear(partidas.reduce((s, x) => s + x.subtotalFiscal, 0));
   const descuento = redondear(partidas.reduce((s, x) => s + x.descuentoFiscal, 0));
-  // Agrupar traslados por tipo y tasa antes de redondear a 2 decimales.
   const impuestosAgrupados = {};
-  partidas.forEach((x) => {
-    if (x.objeto === '02' && x.tipo !== 'exento') {
-      impuestosAgrupados[x.tipo] = (impuestosAgrupados[x.tipo] || 0) + x.impuesto;
+  partidas.forEach(x => {
+    if (x.objeto === '02' && !['exento', 'sin_traslado_iva'].includes(x.tipo)) {
+      impuestosAgrupados[x.tipo] = (impuestosAgrupados[x.tipo] || 0) + x.iva;
     }
   });
   const iva = redondear(Object.values(impuestosAgrupados)
     .reduce((s, importe) => s + redondear(importe), 0));
-  const total = redondear(subtotal - descuento + iva);
-  if (aCentavos(total) !== aCentavos(venta.total)) {
-    throw new Error(`Total fiscal ${moneda(total)} diferente del ticket ${moneda(venta.total)}`);
+  const isr = redondear(partidas.reduce((s, x) => s + x.isr, 0));
+  const totalTicket = redondear(subtotal - descuento + iva);
+  const totalCfdi = redondear(totalTicket - isr);
+  if (aCentavos(totalTicket) !== aCentavos(venta.total)) {
+    throw new Error(`Total comercial ${moneda(totalTicket)} diferente del ticket ${moneda(venta.total)}`);
   }
-  return { partidas, subtotal, descuento, iva, total,
-    tieneLegado: partidas.some((x) => x.heredado) };
+  const netoPartidas = partidas.reduce((s, x) => s + aCentavos(x.totalCfdi), 0);
+  if (netoPartidas !== aCentavos(totalCfdi)) {
+    throw new Error('La suma de las partidas difiere del total fiscal por redondeos');
+  }
+  return { partidas, subtotal, descuento, iva, isr, totalTicket, totalCfdi,
+    tieneLegado: partidas.some(x => x.heredado) };
 }
 
 export function abrirFormularioFactura(idVenta, onSuccess = null, modo = 'normal') {
@@ -118,8 +135,9 @@ export function abrirFormularioFactura(idVenta, onSuccess = null, modo = 'normal
         Swal.fire({icon:'warning',title:'Factura ya existente',text:'Usa Sustituir CFDI o consulta el historial fiscal.'});
         return;
       }
+      const configuracionPrevia = sustitucion ? (detail.data?.impuestos_cfdi_vigente || {}) : {};
       let calculo;
-      try { calculo = calcularFactura(items, venta); }
+      try { calculo = calcularFactura(items, venta, configuracionPrevia); }
       catch (e) {
         Swal.fire({ icon: 'error', title: 'No se puede previsualizar la factura', text: e.message });
         return;
@@ -144,14 +162,30 @@ export function abrirFormularioFactura(idVenta, onSuccess = null, modo = 'normal
         ? `<div class="mb-3"><label class="form-label" for="fac_emisor">Emisor *</label><select id="fac_emisor" class="form-select"><option value="">Selecciona un emisor</option>${emisores.map((x) => `<option value="${Number(x.issuer_id)}">${escaparHtml(x.name)}${x.rfc ? ` (${escaparHtml(x.rfc)})` : ''}</option>`).join('')}</select></div>`
         : `<p class="mb-3">Emisor: <strong>${escaparHtml(emisores[0].name)}${emisores[0].rfc ? ` (${escaparHtml(emisores[0].rfc)})` : ''}</strong></p>`;
 
+      const tasas = [
+        ['no_objeto', 'No objeto'], ['exento', 'Exento'],
+        ['sin_traslado_iva', 'Sin traslado IVA (solo ISR)'],
+        ['0', 'IVA 0%'], ['0.08', 'IVA 8%'], ['0.16', 'IVA 16%']
+      ];
       const lineasHtml = calculo.partidas.map((p, i) => {
-        const tratamiento = p.tipo === 'exento' ? 'Exento' : p.tipo === 'no_objeto' ? 'No objeto' : `${p.tasa * 100}%`;
-        return `<tr><td>${escaparHtml(items[i].producto)}<br><small class="text-muted">${escaparHtml(items[i].codigo || 'S/C')}</small></td>
+        const it = items[i];
+        const previo = configuracionPrevia[String(it.id)] || {};
+        const sugerencia = Number(it.sugerir_retencion_isr_resico) === 1;
+        const checked = previo.retencion_isr_resico === true ? 'checked' : '';
+        const tasa = String(previo.tipo_iva ?? it.tipo_iva_facturacion ?? it.tipo_iva_venta);
+        const opcionesIva = tasas.map(([val, label]) => `<option value="${val}" ${val === tasa ? 'selected' : ''}>${label}</option>`).join('');
+        return `<tr><td>${escaparHtml(it.producto)}<br><small class="text-muted">${escaparHtml(it.codigo || 'S/C')}</small></td>
           <td class="text-end">${p.cantidad.toFixed(3)}</td>
-          <td class="text-end">${moneda(p.precioFiscal)}</td>
-          <td class="text-end">${moneda(p.descuentoFiscal)}</td>
-          <td class="text-end">${tratamiento}: ${moneda(p.impuesto)}</td>
-          <td class="text-end">${moneda(p.totalFiscal)}</td></tr>`;
+          <td class="text-end"><span id="fac_punit_${Number(it.id)}">${moneda(p.precioFiscal)}</span></td>
+          <td class="text-end"><span id="fac_desc_${Number(it.id)}">${moneda(p.descuentoFiscal)}</span></td>
+          <td><select class="form-select form-select-sm fac_iva_partida" data-id="${Number(it.id)}">${opcionesIva}</select>
+            <small id="fac_iva_importe_${Number(it.id)}">IVA: ${moneda(p.iva)}</small></td>
+          <td class="text-center">
+            <label class="small mb-0"><input type="checkbox" class="fac_isr_partida" data-id="${Number(it.id)}" ${checked}>
+              ISR 1.25%${sugerencia ? ' (sugerido)' : ''}</label>
+            <br><small id="fac_isr_importe_${Number(it.id)}">${moneda(p.isr)}</small>
+          </td>
+          <td class="text-end"><strong id="fac_total_linea_${Number(it.id)}">${moneda(p.totalCfdi)}</strong></td></tr>`;
       }).join('');
       const esCredito = venta.tipo_venta === 'credito' || Number(venta.saldo_pendiente || 0) > 0;
       const metodoSugerido = sustitucion ? (venta.factura_metodo_pago || 'PUE') : (esCredito ? 'PPD' : 'PUE');
@@ -182,19 +216,86 @@ export function abrirFormularioFactura(idVenta, onSuccess = null, modo = 'normal
           <h6 class="mt-2">Partidas (importes fiscales)</h6>
           <div class="table-responsive" style="max-height:230px"><table class="table table-sm table-striped"><thead><tr>
             <th>Producto</th><th class="text-end">Cantidad</th><th class="text-end">P. unitario sin IVA</th>
-            <th class="text-end">Descuento sin IVA</th><th class="text-end">IVA</th><th class="text-end">Total</th>
+            <th class="text-end">Descuento sin IVA</th><th>IVA aplicado</th><th>Retención ISR</th><th class="text-end">Total CFDI</th>
           </tr></thead><tbody>${lineasHtml}</tbody></table></div>
           <div class="ms-auto" style="max-width:340px">
             <div class="d-flex justify-content-between"><span>Subtotal sin IVA</span><strong id="fac_subtotal">${moneda(calculo.subtotal)}</strong></div>
             <div class="d-flex justify-content-between"><span>Descuento sin IVA</span><strong id="fac_descuento">-${moneda(calculo.descuento)}</strong></div>
-            <div class="d-flex justify-content-between"><span>IVA</span><strong id="fac_impuesto">${moneda(calculo.iva)}</strong></div>
-            <div class="d-flex justify-content-between border-top mt-1 pt-1"><span>Total</span><strong id="fac_total">${moneda(calculo.total)}</strong></div>
+            <div class="d-flex justify-content-between"><span>IVA trasladado</span><strong id="fac_impuesto">${moneda(calculo.iva)}</strong></div>
+            <div class="d-flex justify-content-between"><span>ISR retenido</span><strong id="fac_isr_total">-${moneda(calculo.isr)}</strong></div>
+            <div class="d-flex justify-content-between"><span>Total del ticket</span><strong id="fac_total_ticket">${moneda(calculo.totalTicket)}</strong></div>
+            <div class="d-flex justify-content-between border-top mt-1 pt-1"><span>Total del CFDI</span><strong id="fac_total">${moneda(calculo.totalCfdi)}</strong></div>
+            <p id="fac_aviso_retenido" class="small text-warning mt-2" style="display:none">El total fiscal será menor que el ticket por la retención. Pikero NO ajusta caja, abonos ni pagos automáticamente. Concilia lo efectivamente pagado.</p>
+            <div id="fac_error_impuestos" class="small text-danger mt-2" style="display:none"></div>
           </div>
           ${calculo.tieneLegado ? '<p class="small text-warning mt-2">Aviso: este ticket es anterior a la migración. Se consultó la configuración fiscal actual del catálogo; revisa el tratamiento antes de timbrar.</p>' : ''}
         </div>`,
         showCancelButton: true, confirmButtonText: sustitucion ? 'Emitir sustituta' : 'Solicitar factura', cancelButtonText: 'Cancelar',
         didOpen: () => {
           inicializarSelectpicker(Swal.getPopup());
+          const leerConfigImpuestos = () => {
+            const config = {};
+            items.forEach(it => {
+              const id = String(it.id);
+              config[id] = {
+                tipo_iva: String($(`.fac_iva_partida[data-id="${id}"]`).val()),
+                retencion_isr_resico: $(`.fac_isr_partida[data-id="${id}"]`).is(':checked')
+              };
+            });
+            return config;
+          };
+          // Se expone solo dentro del popup, no se envían montos desde el navegador.
+          Swal.getPopup().leerConfigImpuestos = leerConfigImpuestos;
+          const actualizarVista = () => {
+            try {
+              const r = calcularFactura(items, venta, leerConfigImpuestos());
+              r.partidas.forEach((p, i) => {
+                const id = String(items[i].id);
+                $(`#fac_punit_${id}`).text(moneda(p.precioFiscal));
+                $(`#fac_desc_${id}`).text(moneda(p.descuentoFiscal));
+                $(`#fac_iva_importe_${id}`).text(`IVA: ${moneda(p.iva)}`);
+                $(`#fac_isr_importe_${id}`).text(moneda(p.isr));
+                $(`#fac_total_linea_${id}`).text(moneda(p.totalCfdi));
+              });
+              $('#fac_subtotal').text(moneda(r.subtotal));
+              $('#fac_descuento').text('-' + moneda(r.descuento));
+              $('#fac_impuesto').text(moneda(r.iva));
+              $('#fac_isr_total').text('-' + moneda(r.isr));
+              $('#fac_total_ticket').text(moneda(r.totalTicket));
+              $('#fac_total').text(moneda(r.totalCfdi));
+              $('#fac_aviso_retenido').toggle(r.isr > 0);
+              $('#fac_error_impuestos').text('').hide();
+            } catch (e) {
+              $('#fac_error_impuestos').text(e.message).show();
+              $('#fac_total').text('Revisar impuestos');
+            }
+          };
+          // Sugerencia automatica solo con emisor PF RESICO 626 y receptor PM.
+          // PHP hace la validacion definitiva; la configuracion del producto no basta.
+          const isrAjustadoManualmente = new Set();
+          $(Swal.getPopup()).on('change', '.fac_isr_partida', function () {
+            isrAjustadoManualmente.add(String($(this).data('id')));
+          });
+          const aplicarSugerencias = () => {
+            if (sustitucion) return;
+            const emisorId = idEmisorUnico ?? Number($('#fac_emisor').val());
+            const emisor = emisores.find(x => Number(x.issuer_id) === emisorId) || {};
+            const rfcEmisor = String(emisor.rfc ?? emisor.Rfc ?? '');
+            const regimenEmisor = String(emisor.fiscal_regime ?? emisor.FiscalRegime ?? emisor.regimen_fiscal ?? '');
+            const receptorEsPM = String($('#fac_rfc').val() || '').trim().toUpperCase().length === 12;
+            const procede = rfcEmisor.length === 13 && regimenEmisor === '626' && receptorEsPM;
+            items.forEach(it => {
+              const id = String(it.id);
+              if (isrAjustadoManualmente.has(id)) return;
+              const sugerir = Number(it.sugerir_retencion_isr_resico) === 1;
+              $(`.fac_isr_partida[data-id="${id}"]`).prop('checked', procede && sugerir);
+            });
+            actualizarVista();
+          };
+          $(Swal.getPopup()).on('change', '.fac_iva_partida, .fac_isr_partida', actualizarVista);
+          $('#fac_rfc').on('blur change', aplicarSugerencias);
+          $('#fac_emisor').on('change', aplicarSugerencias);
+          actualizarVista();
           if (sustitucion) {
             $('#fac_rfc').val(venta.factura_rfc || '');
             $('#fac_razon').val(venta.factura_razon_social || '');
@@ -219,6 +320,7 @@ export function abrirFormularioFactura(idVenta, onSuccess = null, modo = 'normal
             $('#fac_regimen').selectpicker('val', c.regimen_fiscal || '');
             $('#fac_uso').selectpicker('val', c.uso_cfdi || '');
             $('#fac_correo').val(c.correo || '');
+            aplicarSugerencias();
           });
         },
         preConfirm: () => {
@@ -245,7 +347,15 @@ export function abrirFormularioFactura(idVenta, onSuccess = null, modo = 'normal
               !datos.regimen_fiscal || !datos.uso_cfdi) {
             Swal.showValidationMessage('Completa los datos fiscales obligatorios.'); return false;
           }
-          // No se envían importes, descuentos ni IVA al backend: PHP valida el ticket histórico.
+          datos.impuestos_partidas = Swal.getPopup().leerConfigImpuestos();
+          let resultadoFiscal;
+          try { resultadoFiscal = calcularFactura(items, venta, datos.impuestos_partidas); }
+          catch (e) { Swal.showValidationMessage(e.message); return false; }
+          if (resultadoFiscal.isr > 0 && datos.rfc.length !== 12) {
+            Swal.showValidationMessage('La retención ISR RESICO del 1.25% requiere receptor persona moral (RFC de 12 caracteres).');
+            return false;
+          }
+          // No se envían montos ni descuentos desde el navegador: PHP reconstruye la operación.
           return datos;
         }
       }).then((result) => {
