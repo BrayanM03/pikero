@@ -5,6 +5,7 @@ require_once __DIR__ . '/../models/Datatable.php';
 require_once __DIR__ . '/../utils/Tenant.php';
 require_once __DIR__ . '/../services/FacturamaClient.php';
 require_once __DIR__ . '/../services/InvoiceMailer.php';
+require_once __DIR__ . '/../services/CfdiConceptEditor.php';
 
 class Venta extends Datatable
 {
@@ -237,6 +238,23 @@ class Venta extends Datatable
              FROM cfdi_documentos WHERE id_venta=? AND id_ferreteria=? AND id_sucursal=? ORDER BY version ASC',
             [$id_venta,$this->id_ferreteria,$this->id_sucursal]
         );
+        // La versión timbrada se conserva exactamente por concepto y en su orden original.
+        // Esto permite sustituir sin perder ajustes de impuestos o descripciones.
+        $conceptosVigentes = [];
+        if (!empty($venta[0]['uuid_factura'])) {
+            $emitido = $this->db->select(
+                'SELECT payload_json FROM cfdi_documentos WHERE id_venta=? AND id_ferreteria=? AND uuid=? LIMIT 1',
+                [$id_venta,$this->id_ferreteria,strtoupper((string)$venta[0]['uuid_factura'])]
+            );
+            $payloadEmitido = json_decode((string)($emitido[0]['payload_json'] ?? ''), true);
+            if (is_array($payloadEmitido) && is_array($payloadEmitido['Items'] ?? null)) {
+                foreach ($items as $pos => $it) {
+                    if (isset($payloadEmitido['Items'][$pos]) && is_array($payloadEmitido['Items'][$pos])) {
+                        $conceptosVigentes[(string)$it['id']] = $payloadEmitido['Items'][$pos];
+                    }
+                }
+            }
+        }
         // Precargar, por índice de partida, las tasas y retenciones realmente
         // timbradas en la última versión. No consultar el producto actual para ello.
         $configActual = [];
@@ -288,7 +306,8 @@ class Venta extends Datatable
                 'abonos' => $abonos,
                 'formas_pago' => $formas_pago,
                 'documentos_cfdi' => $documentos,
-                'impuestos_cfdi_vigente' => $configActual
+                'impuestos_cfdi_vigente' => $configActual,
+                'conceptos_cfdi_vigente' => $conceptosVigentes
             ]
         ];
     }
@@ -459,6 +478,18 @@ class Venta extends Datatable
         if (!$preparado['estatus']) return $preparado;
         $issuerId = $preparado['issuer_id'];
         $cfdiPayload = $preparado['payload'];
+        // Un reintento incierto debe conservar el payload original (conceptos,
+        // receptor, tasas, fecha y folio). No cambiar datos al reenviar.
+        if ($intentoPrevio) {
+            $frozen = $this->db->select('SELECT factura_payload FROM ventas WHERE id=? AND id_ferreteria=?',
+                [$id_venta,$this->id_ferreteria]);
+            $frozenPayload=json_decode((string)($frozen[0]['factura_payload'] ?? ''),true);
+            if (!is_array($frozenPayload) || !isset($frozenPayload['Items'])) {
+                return ['estatus'=>false,'mensaje'=>'Intento anterior sin payload íntegro; revisar emisión manualmente'];
+            }
+            $cfdiPayload=$frozenPayload;
+        }
+
         $deliveryOptions = $preparado['entrega'];
         $rfc = $preparado['rfc'];
         $razon_social = $preparado['razon_social'];
@@ -530,8 +561,6 @@ class Venta extends Datatable
         }
 
         // 7) Timbrar
-       /*  print_r($cfdiPayload); // Debug: Verificar el payload antes de enviar
-        die(); */
         $response = $client->facturar($clientId, $issuerId, $cfdiPayload, $deliveryOptions);
 
         if (!$response['estatus']) {
@@ -602,6 +631,34 @@ class Venta extends Datatable
         );
         if (!$items) return ['estatus'=>false, 'mensaje'=>'Venta sin conceptos'];
 
+        // La API actual admite conceptos editables SOLO si se envia el conjunto completo.
+        // Se ejecuta reconstruccion fiscal en backend; JAMAS confiar en totales JS.
+        if (array_key_exists('conceptos_editados', $data)) {
+            if (!is_array($data['conceptos_editados'])) {
+                return ['estatus'=>false,'mensaje'=>'conceptos_editados debe ser un objeto de partidas'];
+            }
+            $issuerRfc = strtoupper(trim((string)($issuer['rfc'] ?? $issuer['Rfc'] ?? '')));
+            $issuerRegimen = trim((string)($issuer['fiscal_regime'] ?? $issuer['FiscalRegime'] ?? $issuer['regimen_fiscal'] ?? ''));
+            if ($issuerRegimen === '' && $issuerRfc !== '') {
+                $emisorTenant=$this->db->select('SELECT regimen_fiscal FROM ferreterias WHERE id=? AND UPPER(rfc)=? LIMIT 1',
+                    [$this->id_ferreteria,$issuerRfc]);
+                $issuerRegimen=trim((string)($emisorTenant[0]['regimen_fiscal'] ?? ''));
+            }
+            $build =  CfdiConceptEditor::build($items, $data['conceptos_editados'],
+                (float)$venta['total'], $issuerRfc, $issuerRegimen, $rfc);
+            if (!$build['estatus']) return $build;
+            $cfdiItems=$build['items'];
+            $isrResumen=0.0;
+            foreach ($cfdiItems as $itCfdi) {
+                foreach (($itCfdi['Taxes'] ?? []) as $tax) {
+                    if (($tax['Name'] ?? '')==='ISR' && !empty($tax['IsRetention'])) {
+                        $isrResumen+=(float)($tax['Total'] ?? 0);
+                    }
+                }
+            }
+            $isrResumen=round($isrResumen,2);
+            $totalFiscalResumen=(float)$build['resumen']['total_cfdi'];
+        } else {
         $ajustesFiscal = $data['impuestos_partidas'] ?? [];
         if (!is_array($ajustesFiscal)) {
             return ['estatus'=>false, 'mensaje'=>'La configuración de impuestos debe ser un objeto'];
@@ -690,13 +747,10 @@ class Venta extends Datatable
             if ($descuentoFiscal < 0 || $descuentoFiscal > $subtotal) {
                 return ['estatus'=>false,'mensaje'=>'Descuento fiscal inválido'];
             }
-          $base = round($subtotal - $descuentoFiscal, 6);
-            $iva = $factorTipo === 'Tasa' ? round($base * $tasa, 2) : 0.0; // Redondear el IVA a 2 decimales exactos
-            $isr = $retenIsr ? round($base * 0.0125, 2) : 0.0;           // Redondear el ISR a 2 decimales exactos
-            
+            $base = round($subtotal - $descuentoFiscal, 6);
+            $iva = $factorTipo === 'Tasa' ? round($base * $tasa, 6) : 0.0;
+            $isr = $retenIsr ? round($base * 0.0125, 6) : 0.0;
             $totalComercialItem = round($base + $iva, 2);
-            
-            // Forzar que el total de la partida cuadre aritméticamente con los impuestos ya redondeados:
             $totalItem = round($base + $iva - $isr, 2);
             $importeTicket = round((float)$item['importe'], 2);
             $sumaTicketC += (int)round($importeTicket * 100);
@@ -733,20 +787,20 @@ class Venta extends Datatable
             if ($descuentoFiscal > 0) {
                 $concepto['Discount'] = $descuentoFiscal;
             }
-           if ($factorTipo === 'Exento') {
+            if ($factorTipo === 'Exento') {
                 $concepto['Taxes'] = [[
-                    'Name'=>'IVA Exento', 'Base'=>round($base, 2), 'IsRetention'=>false
+                    'Name'=>'IVA Exento', 'Base'=>$base, 'IsRetention'=>false
                 ]];
             } elseif ($factorTipo === 'Tasa') {
                 $concepto['Taxes'] = [[
-                    'Name'=>'IVA', 'Rate'=>$tasa, 'Base'=>round($base, 2),
-                    'Total'=>round($iva, 2), 'IsRetention'=>false, 'IsQuota'=>false
+                    'Name'=>'IVA', 'Rate'=>$tasa, 'Base'=>$base,
+                    'Total'=>$iva, 'IsRetention'=>false, 'IsQuota'=>false
                 ]];
             }
             if ($retenIsr) {
                 $concepto['Taxes'][] = [
-                    'Name'=>'ISR', 'Rate'=>0.0125, 'Base'=>round($base, 2),
-                    'Total'=>round($isr, 2), 'IsRetention'=>true, 'IsQuota'=>false
+                    'Name'=>'ISR', 'Rate'=>0.0125, 'Base'=>$base,
+                    'Total'=>$isr, 'IsRetention'=>true, 'IsQuota'=>false
                 ];
             }
             $cfdiItems[] = $concepto;
@@ -766,6 +820,9 @@ class Venta extends Datatable
             return ['estatus' => false, 'mensaje' =>
                 'La suma fiscal de partidas, descuentos e impuestos no coincide con la venta. Revisa redondeos antes de timbrar.'];
         }
+
+
+        } // fin de compatibilidad con modalidad ISR/IVA anterior
 
         $ferreteriaRows = $this->db->select('SELECT logo, codigo_postal FROM ferreterias WHERE id = ?', [$this->id_ferreteria]);
         $ferreteriaInfo = $ferreteriaRows[0] ?? [];
@@ -819,6 +876,22 @@ class Venta extends Datatable
         ];
         if ($correo !== '') $receiver['Email'] = $correo;
 
+        // Los tipos de Egreso, Traslado, Pago y Nómina requieren flujos propios.
+        if (($data['tipo_comprobante'] ?? 'I') !== 'I') {
+            return ['estatus'=>false,'mensaje'=>'El ticket solo puede originar CFDI tipo I; E/T/P/N requieren módulos independientes'];
+        }
+        if (($data['moneda'] ?? 'MXN') !== 'MXN') {
+            return ['estatus'=>false,'mensaje'=>'La venta de este POS está valuada en MXN; otras monedas requieren tipo de cambio y conciliación'];
+        }
+        if (!in_array($exportation, ['01','03','04'], true)) {
+            return ['estatus'=>false,'mensaje'=>'Exportación 02 requiere complemento de comercio exterior; no habilitada aún'];
+        }
+        $condiciones=trim((string)($data['condiciones_pago'] ?? ''));
+        $orden=trim((string)($data['numero_orden'] ?? ''));
+        $observaciones=trim((string)($data['observaciones'] ?? ''));
+        if (strlen($condiciones)>2000 || strlen($orden)>200 || strlen($observaciones)>1000) {
+            return ['estatus'=>false,'mensaje'=>'Longitud de condiciones, orden u observaciones excedida'];
+        }
         $cfdiPayload = [
             'CfdiType'        => 'I',
             'Folio'           => $folio,          // clave de idempotencia
@@ -831,6 +904,9 @@ class Venta extends Datatable
             'Items'           => $cfdiItems,
             'Exportation' => $exportation,
         ];
+        if ($condiciones !== '') $cfdiPayload['PaymentConditions']=$condiciones;
+        if ($orden !== '') $cfdiPayload['OrderNumber']=$orden;
+        if ($observaciones !== '') $cfdiPayload['Observations']=$observaciones;
         $deliveryOptions = $this->opcionesEntrega($correo, $ferreteriaInfo);
 
         return [

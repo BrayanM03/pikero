@@ -1,1 +1,778 @@
-import Toast from"../utils/toast.js";import{abrirFormularioFactura}from"../utils/facturacion.js";let carrito=[],clientes=[],formasPago=[],searchTimeout=null,pagosCache={};const round2=e=>Math.round(100*(Number(e)+Number.EPSILON))/100,centavos=e=>Math.round(100*Number(e)),esc=e=>String(e??"").replace(/[&<>"']/g,e=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[e]));function tasaProducto(e){const t=String(e.tipo_iva_venta),o=String(e.objeto_impuesto||"");if(!["01","02"].includes(o)||"no_objeto"===t!=("01"===o))throw new Error(`Revisa objeto de impuesto de ${e.nombre}`);if(["exento","no_objeto","0"].includes(t))return 0;if("0.16"===t||"0.08"===t)return Number(t);throw new Error(`Configura IVA de ${e.nombre} en el catálogo`)}function resumenDescuentos(){const e=carrito.map(e=>{const t=tasaProducto(e);if(![0,1].includes(Number(e.precio_venta_incluye_iva)))throw new Error(`Falta configuración de precio/IVA para ${e.nombre} en el buscador`);const o=1===Number(e.precio_venta_incluye_iva),n=round2(Number(e.precio)*Number(e.cantidad)),a=o?n:round2(n+round2(n*t));return centavos(a)}),t=carrito.map((t,o)=>{const n=centavos(t.descuento||0);if(n<0||n>e[o])throw new Error(`Descuento inválido en ${t.nombre}`);return n}),o=e.map((e,o)=>e-t[o]),n=o.reduce((e,t)=>e+t,0),a=centavos($("#pos-descuento-general").val()||0);if(a<0||a>n)throw new Error("Descuento general inválido");const r=o.map(()=>0);if(a&&n){const e=o.map((e,t)=>{const o=a*e/n,i=Math.floor(o);return r[t]=i,{i:t,resto:o-i}}).sort((e,t)=>t.resto-e.resto||e.i-t.i),t=a-r.reduce((e,t)=>e+t,0);for(let o=0;o<t;o++)r[e[o].i]++}const i=e.map((e,n)=>({bruto:e/100,descuento_producto:t[n]/100,descuento_general:r[n]/100,total:(o[n]-r[n])/100}));return{lineas:i,subtotal:e.reduce((e,t)=>e+t,0)/100,descuento_productos:t.reduce((e,t)=>e+t,0)/100,descuento_general:a/100,total:i.reduce((e,t)=>e+centavos(t.total),0)/100}}function obtenerTotalCarrito(){return resumenDescuentos().total}function obtenerMontoACobrar(){return"credito"===$("#pos-tipo-venta").val()?round2(parseFloat($("#pos-abono-inicial").val())||0):obtenerTotalCarrito()}function seleccionFormasPago(){return $("#pos-forma-pago option:selected").map(function(){return{id:Number($(this).val()),nombre:$(this).text().trim()}}).get()}function cargarCatalogos(){$.get(BASE_URL+"api/punto_venta.php?tipo=catalogos",function(e){if(!e.estatus)return;clientes=e.data.clientes||[],formasPago=e.data.formas_pago||[];const t=document.getElementById("pos-cliente");t.innerHTML="",clientes.forEach(e=>{t.innerHTML+=`<option value="${e.id}" data-publico="${1===Number(e.es_publico)?"1":"0"}">${e.nombre} ${e.rfc?"("+e.rfc+")":""}</option>`});const o=document.getElementById("pos-forma-pago");o.innerHTML="",formasPago.forEach(e=>{o.innerHTML+=`<option value="${e.id}">${e.nombre}</option>`}),formasPago.length&&$("#pos-forma-pago").val(String(formasPago[0].id)),$("#pos-forma-pago").selectpicker("refresh"),setearFormaPago()},"json")}function renderCarrito(){const e=document.getElementById("pos-items-body");if(0===carrito.length)return e.innerHTML='\n      <tr>\n        <td colspan="6" class="text-center py-5 text-muted">\n          <i class="fa-solid fa-cart-arrow-down fa-3x mb-3 text-secondary opacity-50"></i>\n          <p class="mb-0">El carrito está vacío. Escanea o busca productos para comenzar.</p>\n        </td>\n      </tr>',void actualizarTotales();let t,o="";try{t=resumenDescuentos()}catch(e){return void Toast.fire({icon:"error",title:e.message})}carrito.forEach((e,n)=>{const a=t.lineas[n].total;o+=`\n      <tr>\n        <td>\n          <div class="fw-bold">${esc(e.nombre)}</div>\n          <small class="text-muted">SKU: ${esc(e.codigo||"S/C")} | Stock: ${e.stock||0} ${esc(e.unidad||"pza")}</small>\n        </td>\n        <td class="text-center">\n          <div class="input-group input-group-sm">\n            <button class="btn btn-outline-secondary" type="button" onclick="modificarCantidad(${n}, -1)">-</button>\n            <input type="number" step="0.001" class="form-control text-center fw-bold px-1" value="${e.cantidad}" onchange="cambiarCantidadDirecta(${n}, this.value)">\n            <button class="btn btn-outline-secondary" type="button" onclick="modificarCantidad(${n}, 1)">+</button>\n          </div>\n        </td>\n        <td class="text-end">$${e.precio.toFixed(2)}</td>\n        <td><input type="number" min="0" step="0.01" class="form-control form-control-sm" value="${Number(e.descuento||0).toFixed(2)}" aria-label="Descuento por producto" onchange="cambiarDescuentoProducto(${n}, this.value)"></td>\n        <td class="text-end fw-bold text-dark">$${a.toFixed(2)}</td>\n        <td class="text-center">\n          <button class="btn btn-outline-danger btn-sm" onclick="eliminarDelCarrito(${n})" title="Quitar">\n            <i class="fa-solid fa-xmark"></i>\n          </button>\n        </td>\n      </tr>`}),e.innerHTML=o,actualizarTotales()}function actualizarTotales(){let e;try{e=resumenDescuentos()}catch(e){return void $("#pos-total").text("—")}const t=carrito.reduce((e,t)=>e+Number(t.cantidad),0);$("#pos-total-articulos").text(t.toFixed(t%1==0?0:2)),$("#pos-subtotal").text(`$${e.subtotal.toFixed(2)}`),$("#pos-descuentos-resumen").text(`-$${(e.descuento_productos+e.descuento_general).toFixed(2)}`),$("#pos-total").text(`$${e.total.toFixed(2)}`);const o=document.getElementById("pos-abono-inicial");"credito"===$("#pos-tipo-venta").val()&&Number(o.value)>e.total&&(o.value=e.total.toFixed(2)),calcularCambio(),actualizarRestantePagos()}function calcularCambio(){let e;try{e=obtenerTotalCarrito()}catch(e){return}const t=document.getElementById("pos-pago-con"),o=parseFloat(t.value)||0,n=o-e,a=document.getElementById("pos-cambio");o>0?n>=0?(a.className="h4 mb-0 fw-bold text-success",a.innerText=`$${n.toFixed(2)}`):(a.className="h4 mb-0 fw-bold text-danger",a.innerText=`Faltan $${Math.abs(n).toFixed(2)}`):(a.className="h4 mb-0 fw-bold text-primary",a.innerText="$0.00")}function agregarProductoAlCarrito(e,t=1){try{if(tasaProducto(e),![0,1].includes(Number(e.precio_venta_incluye_iva)))throw new Error("Falta indicar si el precio incluye IVA")}catch(e){return void Toast.fire({icon:"warning",title:e.message})}const o=parseFloat(e.stock||0),n=parseFloat(t||1);if(o<=0)return void Toast.fire({icon:"warning",title:"Sin stock disponible",text:`${e.nombre} no tiene existencias en este momento.`});if(n>o)return void Toast.fire({icon:"warning",title:"Stock insuficiente",text:`Solo hay ${o} ${e.unidad||"pza"} disponibles de ${e.nombre}.`});const a=carrito.findIndex(t=>t.id===e.id);if(a>=0){const t=carrito[a].cantidad+n;if(t>o)return void Toast.fire({icon:"warning",title:"Stock insuficiente",text:`No puedes agregar más de ${o} ${e.unidad||"pza"} de ${e.nombre}.`});carrito[a].cantidad=t}else carrito.push({id:e.id,codigo:e.codigo,nombre:e.nombre,precio:parseFloat(e.precio_venta||0),unidad:e.unidad,stock:o,cantidad:n,descuento:0,tipo_iva_venta:e.tipo_iva_venta,precio_venta_incluye_iva:e.precio_venta_incluye_iva,objeto_impuesto:e.objeto_impuesto});const r=document.getElementById("pos-buscador");r.value="",document.getElementById("pos-resultados").style.display="none",r.focus(),renderCarrito()}function guardarPagosCache(){$(".input-forma-pago").each(function(){const e=$(this).data("id");pagosCache[e]=pagosCache[e]||{},pagosCache[e].monto=$(this).val()}),$(".input-referencia-pago").each(function(){const e=$(this).data("id");pagosCache[e]=pagosCache[e]||{},pagosCache[e].referencia=$(this).val()})}function limpiarPagosCapturados(){pagosCache={},$(".input-forma-pago, .input-referencia-pago").val(""),actualizarRestantePagos()}function actualizarVisibilidadEfectivo(e=seleccionFormasPago().length){const t="credito"===$("#pos-tipo-venta").val();document.getElementById("bloque-efectivo").classList.toggle("d-none",t||e>1)}function actualizarRestantePagos(){const e=$("#pagos-restante");if(!e.length)return;let t=0;$(".input-forma-pago").each(function(){t+=parseFloat($(this).val())||0});const o=round2(obtenerMontoACobrar()-t);0===o?e.attr("class","mt-2 fw-bold text-success").text("Pagos completos"):o>0?e.attr("class","mt-2 fw-bold text-danger").text(`Faltan $${o.toFixed(2)}`):e.attr("class","mt-2 fw-bold text-danger").text(`Sobran $${Math.abs(o).toFixed(2)}`)}function setearFormaPago(){const e=seleccionFormasPago(),t=$("#col-formas-pago"),o=$("#area-formas-pago");if(guardarPagosCache(),o.empty(),actualizarVisibilidadEfectivo(e.length),e.length<2)return void t.addClass("d-none");t.removeClass("d-none");let n='<label class="mb-2"><b>Montos por forma de pago</b></label><div class="row g-2">';e.forEach(e=>{const t=pagosCache[e.id]||{};n+=`\n      <div class="col-12 col-md-6">\n        <label class="small fw-bold">${esc(e.nombre)}</label>\n        <div class="input-group input-group-sm mb-1">\n          <span class="input-group-text">$</span>\n          <input type="number" min="0" step="0.01" class="form-control input-forma-pago" data-id="${e.id}" value="${esc(t.monto??"")}" placeholder="0.00">\n          <button type="button" class="btn btn-outline-secondary btn-completar-pago" data-id="${e.id}" title="Completar con el restante">Resto</button>\n        </div>\n        <input type="text" maxlength="100" class="form-control form-control-sm input-referencia-pago" data-id="${e.id}" value="${esc(t.referencia??"")}" placeholder="Referencia / autorización (opcional)">\n      </div>`}),n+='</div><div id="pagos-restante" class="mt-2 fw-bold"></div>',o.html(n),actualizarRestantePagos()}function obtenerPagos(e){const t=seleccionFormasPago();if(0===t.length)return{error:"Selecciona al menos una forma de pago"};if(1===t.length)return{pagos:[{id_forma_pago:t[0].id,nombre:t[0].nombre,monto:e,referencia:null}]};const o=[];let n=0;return t.forEach(e=>{const t=round2(parseFloat($(`.input-forma-pago[data-id="${e.id}"]`).val())||0);if(t<=0)return;const a=($(`.input-referencia-pago[data-id="${e.id}"]`).val()||"").trim();o.push({id_forma_pago:e.id,nombre:e.nombre,monto:t,referencia:a||null}),n+=t}),0===o.length?{error:"Captura el monto de cada forma de pago"}:centavos(n)!==centavos(e)?{error:`La suma de los pagos ($${round2(n).toFixed(2)}) debe ser igual a $${e.toFixed(2)}`}:{pagos:o}}function estilizarBordes(e,t,o){if(o){$(`#${e}`).css("border","1px solid #59de64");let t=$(`#${e}`).next();t.is("small")||t.removeClass("border-red").addClass("border-success")}else{$(`#${e}`).css("border","1px solid red");let t=$(`#${e}`).next();t.is("small")||t.removeClass("border-success").addClass("border-red")}$(`#small_${e}`).text(t),$(`#${e}`).selectpicker("refresh")}function buscarProductos(e){e&&0!==e.trim().length?$.get(BASE_URL+"api/punto_venta.php?tipo=buscar&q="+encodeURIComponent(e),function(e){const t=document.getElementById("pos-resultados");if(!e.estatus||!e.data||0===e.data.length)return t.innerHTML='<div class="list-group-item text-muted">No se encontraron productos coincidentes</div>',void(t.style.display="block");let o="";e.data.forEach(e=>{const t=parseFloat(e.stock||0)<=0;let n=Number(e.precio_venta)||0;try{0===Number(e.precio_venta_incluye_iva)&&(n=round2(n*(1+tasaProducto(e))))}catch(e){}o+=`\n        <a href="#" class="list-group-item list-group-item-action py-2 item-resultado-pos ${t?"border-danger text-muted":""}" data-prod='${esc(JSON.stringify(e))}' ${t?'aria-disabled="true"':""}>\n          <div class="d-flex justify-content-between align-items-center">\n            <div>\n              <strong>${esc(e.nombre)}</strong>\n              <div class="small ${t?"text-danger":"text-muted"}">SKU: ${esc(e.codigo||"S/C")} | Stock: ${e.stock||0} ${esc(e.unidad||"pza")}</div>\n            </div>\n            <div class="text-end">\n              <span class="badge ${t?"bg-danger":"bg-success"} fs-6">$${n.toFixed(2)}</span>\n              ${t?'<div class="small text-danger mt-1">Sin stock</div>':""}\n            </div>\n          </div>\n        </a>`}),t.innerHTML=o,t.style.display="block",$(".item-resultado-pos").on("click",function(e){e.preventDefault();const t=$(this).data("prod");parseFloat(t.stock||0)<=0?Toast.fire({icon:"warning",title:"Sin stock",text:`${t.nombre} no tiene existencias disponibles.`}):agregarProductoAlCarrito(t)})},"json"):document.getElementById("pos-resultados").style.display="none"}function procesarCobro(){if(0===carrito.length)return void Toast.fire({icon:"warning",title:"Agrega al menos un producto al carrito"});let e;try{e=resumenDescuentos()}catch(e){return void Toast.fire({icon:"warning",title:e.message})}const t=e.total,o=document.getElementById("pos-cliente").value,n=document.getElementById("pos-tipo-venta").value,a="credito"===n?round2(parseFloat(document.getElementById("pos-abono-inicial").value)||0):t,r=document.getElementById("pos-cliente").selectedOptions[0]?.text||"Público en general",i=document.getElementById("pos-fecha").value;if("credito"===n&&(!o||1===$("#pos-cliente option:selected").data("publico")))return void Toast.fire({icon:"warning",title:"Selecciona un cliente registrado para vender a crédito"});if(a<0||a>t)return void Toast.fire({icon:"warning",title:"El abono inicial debe estar entre cero y el total de la venta"});let s=[];if(a>0){const e=obtenerPagos(a);if(e.error)return void Toast.fire({icon:"warning",title:e.error});s=e.pagos}const c=s.length>1,d="credito"===n?a:c?t:parseFloat(document.getElementById("pos-pago-con").value)||t;if("contado"===n&&centavos(d)<centavos(t))return void Swal.fire({icon:"warning",title:"Monto insuficiente",text:`El monto recibido ($${d.toFixed(2)}) es menor que el total de la venta ($${t.toFixed(2)})`});const l="contado"===n?round2(d-t):0,u=s.length?s.map(e=>`${esc(e.nombre)}: $${e.monto.toFixed(2)}${e.referencia?" (ref. "+esc(e.referencia)+")":""}`).join("<br>"):"Pendiente de abono",p=s.length?s.map(e=>`<div class="d-flex justify-content-between"><span>${esc(e.nombre)}</span><span>$${e.monto.toFixed(2)}</span></div>`).join(""):"<div>Pendiente de abono</div>";Swal.fire({title:"Confirmar Cobro",html:`\n      <div class="text-start">\n        <p><strong>Descuentos:</strong> -$${(e.descuento_productos+e.descuento_general).toFixed(2)}</p>\n        <p><strong>Cliente:</strong> ${r}</p>\n        <p><strong>Tipo de venta:</strong> ${"credito"===n?"Crédito":"Contado"}</p>\n        <p><strong>Forma de Pago:</strong><br>${u}</p>\n        <h3 class="text-center text-success my-3">Total: $${t.toFixed(2)}</h3>\n        <p><strong>${"credito"===n?"Abono inicial:":"Paga con:"}</strong> $${d.toFixed(2)}</p>\n        ${"credito"===n?`<p><strong>Saldo pendiente:</strong> $${(t-d).toFixed(2)}</p>`:`<p><strong>Cambio:</strong> $${l.toFixed(2)}</p>`}\n      </div>`,showCancelButton:!0,confirmButtonText:"Confirmar Venta",cancelButtonText:"Regresar"}).then(c=>{if(!c.isConfirmed)return;const u={id_cliente:o,tipo_venta:n,abono_inicial:a,fecha_venta:i,items:carrito.map(e=>({id:e.id,cantidad:e.cantidad,descuento:e.descuento||0})),descuento_general:e.descuento_general,pagos:s.map(({id_forma_pago:e,monto:t,referencia:o})=>({id_forma_pago:e,monto:t,referencia:o}))};$.ajax({url:BASE_URL+"api/punto_venta.php?tipo=cobrar",type:"POST",contentType:"application/json",data:JSON.stringify(u),dataType:"json",success:function(e){if(!e.estatus)return void Swal.fire({icon:"error",title:"Error al cobrar",text:e.mensaje});let o="";(e.items||carrito).forEach(e=>{o+=`\n            <tr>\n              <td>${e.cantidad} x ${esc(e.nombre)}</td>\n              <td class="text-end">$${Number(e.importe??e.precio*e.cantidad).toFixed(2)}</td>\n            </tr>`}),Swal.fire({icon:"success",title:"¡Venta Realizada con Éxito!",html:`\n            <div class="border p-3 rounded text-start" id="ticket-impresion" style="font-family: monospace; font-size: 13px;">\n              <div class="text-center fw-bold">FERRETERÍA PIKERO</div>\n              <div class="text-center text-muted">Ticket de Venta</div>\n              <hr class="my-1">\n              <div>Folio: <strong>${e.folio}</strong></div>\n              <div>Cliente: ${r}</div>\n              <div>Tipo de venta: ${"credito"===n?"Crédito":"Contado"}</div>\n              <div>Forma de pago:</div>\n              ${p}\n              <hr class="my-1">\n              <table class="w-100">\n                ${o}\n              </table>\n              <hr class="my-1">\n              <div class="d-flex justify-content-between fw-bold fs-6">\n                <span>TOTAL:</span>\n                <span>$${parseFloat(e.total).toFixed(2)}</span>\n              </div>\n              <div class="d-flex justify-content-between text-muted"><span>${"credito"===n?"Abono inicial:":"Recibido:"}</span><span>$${d.toFixed(2)}</span></div>\n              ${"credito"===n?`<div class="d-flex justify-content-between fw-bold"><span>Saldo pendiente:</span><span>$${(t-d).toFixed(2)}</span></div>`:`<div class="d-flex justify-content-between text-muted"><span>Cambio:</span><span>$${l.toFixed(2)}</span></div>`}\n              <div class="text-center mt-3 text-muted">¡Gracias por su compra!</div>\n            </div>`,confirmButtonText:'<i class="fa-solid fa-print me-1"></i> Imprimir y Continuar',showDenyButton:!0,denyButtonText:'<i class="fa-solid fa-file-invoice me-1"></i> Facturar recibo',showCancelButton:!0,cancelButtonText:"Continuar sin imprimir"}).then(t=>{if(t.isDenied)abrirFormularioFactura(e.id_venta);else if(t.isConfirmed)if(1===e.tipo_reporte){const t=document.getElementById("ticket-impresion").innerHTML,o=window.open("","","width=400,height=600");o.document.write(`<html><head><title>Ticket ${e.folio}</title><style>body{font-family:monospace;padding:10px;}</style></head><body>${t}</body></html>`),o.document.close(),setTimeout(()=>{o.focus(),o.print(),o.close()},250)}else 2===e.tipo_reporte&&window.open(BASE_URL+"api/ventas.php?tipo=pdf&id="+e.id_venta,"_blank");carrito=[],$("#pos-descuento-general").val("0"),document.getElementById("pos-pago-con").value="",limpiarPagosCapturados(),renderCarrito()})},error:function(){Swal.fire({icon:"error",title:"Error de conexión con el servidor"})}})})}window.setearFormaPago=setearFormaPago,window.modificarCantidad=(e,t)=>{if(!carrito[e])return;const o=parseFloat(carrito[e].stock||0),n=carrito[e].cantidad+t;n<=0?carrito.splice(e,1):n>o?(Toast.fire({icon:"warning",title:"Stock insuficiente",text:`Solo puedes vender ${o} ${carrito[e].unidad||"pza"} como máximo.`}),carrito[e].cantidad=o):carrito[e].cantidad=n,renderCarrito()},window.cambiarCantidadDirecta=(e,t)=>{const o=parseFloat(t),n=parseFloat(carrito[e].stock||0);isNaN(o)||o<=0?carrito.splice(e,1):o>n?(Toast.fire({icon:"warning",title:"Stock insuficiente",text:`Solo hay ${n} ${carrito[e].unidad||"pza"} disponibles.`}),carrito[e].cantidad=n):carrito[e].cantidad=o,renderCarrito()},window.eliminarDelCarrito=e=>{carrito.splice(e,1),renderCarrito()},window.cambiarDescuentoProducto=(e,t)=>{const o=carrito[e];if(!o)return;const n=o.descuento;o.descuento=Number(t);try{resumenDescuentos()}catch(e){o.descuento=n,Toast.fire({icon:"warning",title:e.message})}renderCarrito()},$(document).ready(function(){$("#pos-items-body").closest("table").find("thead tr th").eq(3).before("<th>Desc. $</th>"),$("#pos-total").closest("div").before('\n    <div class="mb-2"><label for="pos-descuento-general" class="form-label">Descuento general ($)</label>\n    <input id="pos-descuento-general" type="number" min="0" step="0.01" value="0" class="form-control form-control-sm">\n    <div class="d-flex justify-content-between small mt-1"><span>Descuentos aplicados</span><strong id="pos-descuentos-resumen">-$0.00</strong></div>\n    </div>'),$("#pos-descuento-general").on("input",()=>{renderCarrito()}),cargarCatalogos(),$("#pos-forma-pago").on("change",setearFormaPago),$(document).on("input",".input-forma-pago",actualizarRestantePagos),$(document).on("click",".btn-completar-pago",function(){const e=$(this).data("id");let t=0;$(".input-forma-pago").each(function(){$(this).data("id")!==e&&(t+=parseFloat($(this).val())||0)});const o=Math.max(0,round2(obtenerMontoACobrar()-t));$(`.input-forma-pago[data-id="${e}"]`).val(o.toFixed(2)),actualizarRestantePagos()});const e=document.getElementById("pos-buscador");e.addEventListener("input",function(){clearTimeout(searchTimeout);const e=this.value;searchTimeout=setTimeout(()=>buscarProductos(e),200)}),e.addEventListener("keydown",function(e){if("Enter"===e.key){e.preventDefault();const t=this.value.trim();if(!t)return;$.get(BASE_URL+"api/punto_venta.php?tipo=buscar&q="+encodeURIComponent(t),function(e){e.estatus&&e.data&&e.data.length>0?agregarProductoAlCarrito(e.data[0]):Toast.fire({icon:"warning",title:"Producto no encontrado"})},"json")}}),document.getElementById("btn-buscar-pos").addEventListener("click",function(){buscarProductos(e.value)}),document.getElementById("pos-pago-con").addEventListener("input",calcularCambio),document.getElementById("pos-tipo-venta").addEventListener("change",function(){const e="credito"===this.value;document.getElementById("bloque-abono-inicial").classList.toggle("d-none",!e),actualizarVisibilidadEfectivo(),e&&1===$("#pos-cliente option:selected").data("publico")&&$("#pos-cliente").val(clientes.find(e=>1!==Number(e.es_publico))?.id||""),actualizarTotales()}),document.getElementById("pos-abono-inicial").addEventListener("input",actualizarTotales),document.getElementById("btn-cobrar-pos").addEventListener("click",procesarCobro),document.getElementById("btn-vaciar-carrito").addEventListener("click",function(){0!==carrito.length&&Swal.fire({icon:"question",title:"¿Vaciar carrito?",showCancelButton:!0,confirmButtonText:"Sí, vaciar",cancelButtonText:"Cancelar"}).then(e=>{e.isConfirmed&&(carrito=[],$("#pos-descuento-general").val("0"),renderCarrito())})}),document.addEventListener("keydown",function(e){"F2"===e.key&&(e.preventDefault(),procesarCobro())}),document.addEventListener("click",function(e){e.target.closest("#pos-buscador")||e.target.closest("#pos-resultados")||(document.getElementById("pos-resultados").style.display="none")})});
+import Toast from '../utils/toast.js';
+import { abrirFormularioFactura } from '../utils/facturacion.js';
+
+let carrito = [];
+let clientes = [];
+let formasPago = [];
+let searchTimeout = null;
+let pagosCache = {}; // montos y referencias capturados por forma de pago
+
+const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+const centavos = (n) => Math.round(Number(n) * 100);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// Importes comerciales en centavos. PHP recalcula todo contra productos de BD.
+function tasaProducto(it) {
+  const t = String(it.tipo_iva_venta);
+  const objeto = String(it.objeto_impuesto || '');
+  if (!['01', '02'].includes(objeto) || (t === 'no_objeto') !== (objeto === '01')) {
+    throw new Error(`Revisa objeto de impuesto de ${it.nombre}`);
+  }
+  if (['exento', 'no_objeto', '0'].includes(t)) return 0;
+  if (t === '0.16' || t === '0.08') return Number(t);
+  throw new Error(`Configura IVA de ${it.nombre} en el catálogo`);
+}
+
+function resumenDescuentos() {
+  const bruto = carrito.map(it => {
+    const tasa = tasaProducto(it);
+    if (![0, 1].includes(Number(it.precio_venta_incluye_iva))) {
+      throw new Error(`Falta configuración de precio/IVA para ${it.nombre} en el buscador`);
+    }
+    const incluye = Number(it.precio_venta_incluye_iva) === 1;
+    const base = round2(Number(it.precio) * Number(it.cantidad));
+    const monto = incluye ? base : round2(base + round2(base * tasa));
+    return centavos(monto);
+  });
+  const descProducto = carrito.map((it, i) => {
+    const valor = centavos(it.descuento || 0);
+    if (valor < 0 || valor > bruto[i]) throw new Error(`Descuento inválido en ${it.nombre}`);
+    return valor;
+  });
+  const disponibles = bruto.map((v, i) => v - descProducto[i]);
+  const disponibleTotal = disponibles.reduce((a,b)=>a+b,0);
+  const general = centavos($('#pos-descuento-general').val() || 0);
+  if (general < 0 || general > disponibleTotal) throw new Error('Descuento general inválido');
+  const distribucion = disponibles.map(() => 0);
+  if (general && disponibleTotal) {
+    const prioridades = disponibles.map((valor, i) => {
+      const cuota = general * valor / disponibleTotal;
+      const piso = Math.floor(cuota);
+      distribucion[i] = piso;
+      return {i, resto: cuota - piso};
+    }).sort((a,b) => b.resto-a.resto || a.i-b.i);
+    const pendiente = general - distribucion.reduce((a,b)=>a+b,0);
+    for (let j=0; j<pendiente; j++) distribucion[prioridades[j].i]++;
+  }
+  const lineas = bruto.map((b,i) => ({
+    bruto: b/100,
+    descuento_producto: descProducto[i]/100,
+    descuento_general: distribucion[i]/100,
+    total: (disponibles[i]-distribucion[i])/100
+  }));
+  return {
+    lineas,
+    subtotal: bruto.reduce((a,b)=>a+b,0)/100,
+    descuento_productos: descProducto.reduce((a,b)=>a+b,0)/100,
+    descuento_general: general/100,
+    total: lineas.reduce((a,l)=>a+centavos(l.total),0)/100
+  };
+}
+
+function obtenerTotalCarrito() {
+  return resumenDescuentos().total;
+}
+
+// Monto que se cobra ahora: el total en contado, o el abono inicial en crédito
+function obtenerMontoACobrar() {
+  if ($('#pos-tipo-venta').val() === 'credito') {
+    return round2(parseFloat($('#pos-abono-inicial').val()) || 0);
+  }
+  return obtenerTotalCarrito();
+}
+
+function seleccionFormasPago() {
+  return $('#pos-forma-pago option:selected').map(function () {
+    return { id: Number($(this).val()), nombre: $(this).text().trim() };
+  }).get();
+}
+
+function cargarCatalogos() {
+  $.get(BASE_URL + 'api/punto_venta.php?tipo=catalogos', function (resp) {
+    if (!resp.estatus) return;
+    clientes = resp.data.clientes || [];
+    formasPago = resp.data.formas_pago || [];
+
+    const selectCli = document.getElementById('pos-cliente');
+    selectCli.innerHTML = '';
+    clientes.forEach((c) => {
+      selectCli.innerHTML += `<option value="${c.id}" data-publico="${Number(c.es_publico) === 1 ? '1' : '0'}">${c.nombre} ${c.rfc ? '(' + c.rfc + ')' : ''}</option>`;
+    });
+
+    const selectFp = document.getElementById('pos-forma-pago');
+    selectFp.innerHTML = '';
+    formasPago.forEach((f) => {
+      selectFp.innerHTML += `<option value="${f.id}">${f.nombre}</option>`;
+    });
+    if (formasPago.length) {
+      $('#pos-forma-pago').val(String(formasPago[0].id));
+    }
+    $('#pos-forma-pago').selectpicker('refresh');
+    setearFormaPago();
+  }, 'json');
+}
+
+function renderCarrito() {
+  const tbody = document.getElementById('pos-items-body');
+  if (carrito.length === 0) {
+    tbody.innerHTML = `
+      <tr>
+        <td colspan="6" class="text-center py-5 text-muted">
+          <i class="fa-solid fa-cart-arrow-down fa-3x mb-3 text-secondary opacity-50"></i>
+          <p class="mb-0">El carrito está vacío. Escanea o busca productos para comenzar.</p>
+        </td>
+      </tr>`;
+    actualizarTotales();
+    return;
+  }
+
+  let html = '';
+  let resumen;
+  try { resumen = resumenDescuentos(); }
+  catch (e) { Toast.fire({icon:'error', title:e.message}); return; }
+  carrito.forEach((item, idx) => {
+    const importe = resumen.lineas[idx].total;
+    html += `
+      <tr>
+        <td>
+          <div class="fw-bold">${esc(item.nombre)}</div>
+          <small class="text-muted">SKU: ${esc(item.codigo || 'S/C')} | Stock: ${item.stock || 0} ${esc(item.unidad || 'pza')}</small>
+        </td>
+        <td class="text-center">
+          <div class="input-group input-group-sm">
+            <button class="btn btn-outline-secondary" type="button" onclick="modificarCantidad(${idx}, -1)">-</button>
+            <input type="number" step="0.001" class="form-control text-center fw-bold px-1" value="${item.cantidad}" onchange="cambiarCantidadDirecta(${idx}, this.value)">
+            <button class="btn btn-outline-secondary" type="button" onclick="modificarCantidad(${idx}, 1)">+</button>
+          </div>
+        </td>
+        <td class="text-end">$${item.precio.toFixed(2)}</td>
+        <td><input type="number" min="0" step="0.01" class="form-control form-control-sm" value="${Number(item.descuento || 0).toFixed(2)}" aria-label="Descuento por producto" onchange="cambiarDescuentoProducto(${idx}, this.value)"></td>
+        <td class="text-end fw-bold text-dark">$${importe.toFixed(2)}</td>
+        <td class="text-center">
+          <button class="btn btn-outline-danger btn-sm" onclick="eliminarDelCarrito(${idx})" title="Quitar">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </td>
+      </tr>`;
+  });
+
+  tbody.innerHTML = html;
+  actualizarTotales();
+}
+
+function actualizarTotales() {
+  let r;
+  try { r = resumenDescuentos(); }
+  catch (e) { $('#pos-total').text('—'); return; }
+  const articulos = carrito.reduce((sum,it) => sum+Number(it.cantidad),0);
+  $('#pos-total-articulos').text(articulos.toFixed(articulos % 1 === 0 ? 0 : 2));
+  $('#pos-subtotal').text(`$${r.subtotal.toFixed(2)}`);
+  $('#pos-descuentos-resumen').text(`-$${(r.descuento_productos+r.descuento_general).toFixed(2)}`);
+  $('#pos-total').text(`$${r.total.toFixed(2)}`);
+  const abono = document.getElementById('pos-abono-inicial');
+  if ($('#pos-tipo-venta').val() === 'credito' && Number(abono.value)>r.total) abono.value=r.total.toFixed(2);
+  calcularCambio();
+  actualizarRestantePagos();
+}
+
+function calcularCambio() {
+  let total;
+  try { total = obtenerTotalCarrito(); } catch (_) { return; }
+
+  const pagoConInput = document.getElementById('pos-pago-con');
+  const pagoCon = parseFloat(pagoConInput.value) || 0;
+  const cambio = pagoCon - total;
+
+  const cambioSpan = document.getElementById('pos-cambio');
+  if (pagoCon > 0) {
+    if (cambio >= 0) {
+      cambioSpan.className = 'h4 mb-0 fw-bold text-success';
+      cambioSpan.innerText = `$${cambio.toFixed(2)}`;
+    } else {
+      cambioSpan.className = 'h4 mb-0 fw-bold text-danger';
+      cambioSpan.innerText = `Faltan $${Math.abs(cambio).toFixed(2)}`;
+    }
+  } else {
+    cambioSpan.className = 'h4 mb-0 fw-bold text-primary';
+    cambioSpan.innerText = '$0.00';
+  }
+}
+
+function agregarProductoAlCarrito(producto, cantidad = 1) {
+  try {
+    tasaProducto(producto);
+    if (![0, 1].includes(Number(producto.precio_venta_incluye_iva))) {
+      throw new Error('Falta indicar si el precio incluye IVA');
+    }
+  } catch (e) {
+    Toast.fire({ icon: 'warning', title: e.message });
+    return;
+  }
+  const stockDisponible = parseFloat(producto.stock || 0);
+  const cantidadSolicitada = parseFloat(cantidad || 1);
+
+  if (stockDisponible <= 0) {
+    Toast.fire({
+      icon: 'warning',
+      title: 'Sin stock disponible',
+      text: `${producto.nombre} no tiene existencias en este momento.`
+    });
+    return;
+  }
+
+  if (cantidadSolicitada > stockDisponible) {
+    Toast.fire({
+      icon: 'warning',
+      title: 'Stock insuficiente',
+      text: `Solo hay ${stockDisponible} ${producto.unidad || 'pza'} disponibles de ${producto.nombre}.`
+    });
+    return;
+  }
+
+  const index = carrito.findIndex((it) => it.id === producto.id);
+  if (index >= 0) {
+    const nuevaCantidad = carrito[index].cantidad + cantidadSolicitada;
+    if (nuevaCantidad > stockDisponible) {
+      Toast.fire({
+        icon: 'warning',
+        title: 'Stock insuficiente',
+        text: `No puedes agregar más de ${stockDisponible} ${producto.unidad || 'pza'} de ${producto.nombre}.`
+      });
+      return;
+    }
+    carrito[index].cantidad = nuevaCantidad;
+  } else {
+    carrito.push({
+      id: producto.id,
+      codigo: producto.codigo,
+      nombre: producto.nombre,
+      precio: parseFloat(producto.precio_venta || 0),
+      unidad: producto.unidad,
+      stock: stockDisponible,
+      cantidad: cantidadSolicitada,
+      descuento: 0,
+      tipo_iva_venta: producto.tipo_iva_venta,
+      precio_venta_incluye_iva: producto.precio_venta_incluye_iva,
+      objeto_impuesto: producto.objeto_impuesto
+    });
+  }
+
+  // Limpiar buscador y resultados
+  const buscador = document.getElementById('pos-buscador');
+  buscador.value = '';
+  document.getElementById('pos-resultados').style.display = 'none';
+  buscador.focus();
+
+  renderCarrito();
+}
+
+function guardarPagosCache() {
+  $('.input-forma-pago').each(function () {
+    const id = $(this).data('id');
+    pagosCache[id] = pagosCache[id] || {};
+    pagosCache[id].monto = $(this).val();
+  });
+  $('.input-referencia-pago').each(function () {
+    const id = $(this).data('id');
+    pagosCache[id] = pagosCache[id] || {};
+    pagosCache[id].referencia = $(this).val();
+  });
+}
+
+function limpiarPagosCapturados() {
+  pagosCache = {};
+  $('.input-forma-pago, .input-referencia-pago').val('');
+  actualizarRestantePagos();
+}
+
+// El bloque de efectivo (paga con / cambio) solo aplica en contado con una sola forma de pago
+function actualizarVisibilidadEfectivo(cantidadFormas = seleccionFormasPago().length) {
+  const esCredito = $('#pos-tipo-venta').val() === 'credito';
+  document.getElementById('bloque-efectivo').classList.toggle('d-none', esCredito || cantidadFormas > 1);
+}
+
+function actualizarRestantePagos() {
+  const el = $('#pagos-restante');
+  if (!el.length) return;
+
+  let suma = 0;
+  $('.input-forma-pago').each(function () { suma += parseFloat($(this).val()) || 0; });
+  const restante = round2(obtenerMontoACobrar() - suma);
+
+  if (restante === 0) {
+    el.attr('class', 'mt-2 fw-bold text-success').text('Pagos completos');
+  } else if (restante > 0) {
+    el.attr('class', 'mt-2 fw-bold text-danger').text(`Faltan $${restante.toFixed(2)}`);
+  } else {
+    el.attr('class', 'mt-2 fw-bold text-danger').text(`Sobran $${Math.abs(restante).toFixed(2)}`);
+  }
+}
+
+function setearFormaPago() {
+  const seleccion = seleccionFormasPago();
+  const colFormasPago = $('#col-formas-pago');
+  const area = $('#area-formas-pago');
+
+  guardarPagosCache(); // conservar lo capturado antes de redibujar
+  area.empty();
+  actualizarVisibilidadEfectivo(seleccion.length);
+
+  // Con una sola forma de pago el monto es todo lo que se cobra: no hay nada que capturar
+  if (seleccion.length < 2) {
+    colFormasPago.addClass('d-none');
+    return;
+  }
+
+  colFormasPago.removeClass('d-none');
+
+  let html = '<label class="mb-2"><b>Montos por forma de pago</b></label><div class="row g-2">';
+  seleccion.forEach((fp) => {
+    const c = pagosCache[fp.id] || {};
+    html += `
+      <div class="col-12 col-md-6">
+        <label class="small fw-bold">${esc(fp.nombre)}</label>
+        <div class="input-group input-group-sm mb-1">
+          <span class="input-group-text">$</span>
+          <input type="number" min="0" step="0.01" class="form-control input-forma-pago" data-id="${fp.id}" value="${esc(c.monto ?? '')}" placeholder="0.00">
+          <button type="button" class="btn btn-outline-secondary btn-completar-pago" data-id="${fp.id}" title="Completar con el restante">Resto</button>
+        </div>
+        <input type="text" maxlength="100" class="form-control form-control-sm input-referencia-pago" data-id="${fp.id}" value="${esc(c.referencia ?? '')}" placeholder="Referencia / autorización (opcional)">
+      </div>`;
+  });
+  html += '</div><div id="pagos-restante" class="mt-2 fw-bold"></div>';
+
+  area.html(html);
+  actualizarRestantePagos();
+}
+
+// Devuelve { pagos } o { error }. montoACobrar = total (contado) o abono inicial (crédito)
+function obtenerPagos(montoACobrar) {
+  const seleccion = seleccionFormasPago();
+  if (seleccion.length === 0) {
+    return { error: 'Selecciona al menos una forma de pago' };
+  }
+
+  if (seleccion.length === 1) {
+    return {
+      pagos: [{ id_forma_pago: seleccion[0].id, nombre: seleccion[0].nombre, monto: montoACobrar, referencia: null }]
+    };
+  }
+
+  const pagos = [];
+  let suma = 0;
+  seleccion.forEach((fp) => {
+    const monto = round2(parseFloat($(`.input-forma-pago[data-id="${fp.id}"]`).val()) || 0);
+    if (monto <= 0) return;
+    const referencia = ($(`.input-referencia-pago[data-id="${fp.id}"]`).val() || '').trim();
+    pagos.push({ id_forma_pago: fp.id, nombre: fp.nombre, monto, referencia: referencia || null });
+    suma += monto;
+  });
+
+  if (pagos.length === 0) {
+    return { error: 'Captura el monto de cada forma de pago' };
+  }
+  if (centavos(suma) !== centavos(montoACobrar)) {
+    return { error: `La suma de los pagos ($${round2(suma).toFixed(2)}) debe ser igual a $${montoACobrar.toFixed(2)}` };
+  }
+  return { pagos };
+}
+
+function estilizarBordes(id, mensaje, estatus){
+  if(!estatus){
+    $(`#${id}`).css('border', '1px solid red')                 
+    let hermano= $(`#${id}`).next()
+    if (!hermano.is("small")) {
+        hermano.removeClass('border-success').addClass('border-red')
+      }
+  }else{
+    $(`#${id}`).css('border', '1px solid #59de64') 
+    let hermano= $(`#${id}`).next()
+    if (!hermano.is("small")) {
+      hermano.removeClass('border-red').addClass('border-success')
+    }
+  }
+  $(`#small_${id}`).text(mensaje)
+  $(`#${id}`).selectpicker('refresh')
+}
+
+window.setearFormaPago = setearFormaPago;
+
+window.modificarCantidad = (index, delta) => {
+  if (!carrito[index]) return;
+  const stockDisponible = parseFloat(carrito[index].stock || 0);
+  const nuevaCantidad = carrito[index].cantidad + delta;
+
+  if (nuevaCantidad <= 0) {
+    carrito.splice(index, 1);
+  } else if (nuevaCantidad > stockDisponible) {
+    Toast.fire({
+      icon: 'warning',
+      title: 'Stock insuficiente',
+      text: `Solo puedes vender ${stockDisponible} ${carrito[index].unidad || 'pza'} como máximo.`
+    });
+    carrito[index].cantidad = stockDisponible;
+  } else {
+    carrito[index].cantidad = nuevaCantidad;
+  }
+  renderCarrito();
+};
+
+window.cambiarCantidadDirecta = (index, valor) => {
+  const v = parseFloat(valor);
+  const stockDisponible = parseFloat(carrito[index].stock || 0);
+
+  if (isNaN(v) || v <= 0) {
+    carrito.splice(index, 1);
+  } else if (v > stockDisponible) {
+    Toast.fire({
+      icon: 'warning',
+      title: 'Stock insuficiente',
+      text: `Solo hay ${stockDisponible} ${carrito[index].unidad || 'pza'} disponibles.`
+    });
+    carrito[index].cantidad = stockDisponible;
+  } else {
+    carrito[index].cantidad = v;
+  }
+  renderCarrito();
+};
+
+window.eliminarDelCarrito = (index) => {
+  carrito.splice(index, 1);
+  renderCarrito();
+};
+
+window.cambiarDescuentoProducto = (index, valor) => {
+  const item = carrito[index];
+  if (!item) return;
+  const anterior = item.descuento;
+  item.descuento = Number(valor);
+  try { resumenDescuentos(); }
+  catch (e) { item.descuento = anterior; Toast.fire({icon:'warning', title:e.message}); }
+  renderCarrito();
+};
+
+function buscarProductos(termino) {
+  if (!termino || termino.trim().length === 0) {
+    document.getElementById('pos-resultados').style.display = 'none';
+    return;
+  }
+
+  $.get(BASE_URL + 'api/punto_venta.php?tipo=buscar&q=' + encodeURIComponent(termino), function (resp) {
+    const contenedor = document.getElementById('pos-resultados');
+    if (!resp.estatus || !resp.data || resp.data.length === 0) {
+      contenedor.innerHTML = '<div class="list-group-item text-muted">No se encontraron productos coincidentes</div>';
+      contenedor.style.display = 'block';
+      return;
+    }
+
+    let html = '';
+    resp.data.forEach((p) => {
+      const sinStock = parseFloat(p.stock || 0) <= 0;
+      let precioMostrado = Number(p.precio_venta) || 0;
+      try {
+        if (Number(p.precio_venta_incluye_iva) === 0) {
+          precioMostrado = round2(precioMostrado * (1 + tasaProducto(p)));
+        }
+      } catch (_) { /* Si faltan datos fiscales, no permitir agregar al carrito. */ }
+      html += `
+        <a href="#" class="list-group-item list-group-item-action py-2 item-resultado-pos ${sinStock ? 'border-danger text-muted' : ''}" data-prod='${esc(JSON.stringify(p))}' ${sinStock ? 'aria-disabled="true"' : ''}>
+          <div class="d-flex justify-content-between align-items-center">
+            <div>
+              <strong>${esc(p.nombre)}</strong>
+              <div class="small ${sinStock ? 'text-danger' : 'text-muted'}">SKU: ${esc(p.codigo || 'S/C')} | Stock: ${p.stock || 0} ${esc(p.unidad || 'pza')}</div>
+            </div>
+            <div class="text-end">
+              <span class="badge ${sinStock ? 'bg-danger' : 'bg-success'} fs-6">$${precioMostrado.toFixed(2)}</span>
+              ${sinStock ? '<div class="small text-danger mt-1">Sin stock</div>' : ''}
+            </div>
+          </div>
+        </a>`;
+    });
+
+    contenedor.innerHTML = html;
+    contenedor.style.display = 'block';
+
+    $('.item-resultado-pos').on('click', function (e) {
+      e.preventDefault();
+      const p = $(this).data('prod');
+      if ((parseFloat(p.stock || 0) <= 0)) {
+        Toast.fire({ icon: 'warning', title: 'Sin stock', text: `${p.nombre} no tiene existencias disponibles.` });
+        return;
+      }
+      agregarProductoAlCarrito(p);
+    });
+  }, 'json');
+}
+
+function procesarCobro() {
+  if (carrito.length === 0) {
+    Toast.fire({ icon: 'warning', title: 'Agrega al menos un producto al carrito' });
+    return;
+  }
+
+  let resumen;
+  try { resumen = resumenDescuentos(); }
+  catch (e) { Toast.fire({icon:'warning', title:e.message}); return; }
+  const total = resumen.total;
+
+  const id_cliente = document.getElementById('pos-cliente').value;
+  const tipo_venta = document.getElementById('pos-tipo-venta').value;
+  const abono_inicial = tipo_venta === 'credito' ? round2(parseFloat(document.getElementById('pos-abono-inicial').value) || 0) : total;
+  const clienteNombre = document.getElementById('pos-cliente').selectedOptions[0]?.text || 'Público en general';
+  const fecha_venta = document.getElementById('pos-fecha').value;
+
+  if (tipo_venta === 'credito' && (!id_cliente || $('#pos-cliente option:selected').data('publico') === 1)) {
+    Toast.fire({ icon: 'warning', title: 'Selecciona un cliente registrado para vender a crédito' });
+    return;
+  }
+  if (abono_inicial < 0 || abono_inicial > total) {
+    Toast.fire({ icon: 'warning', title: 'El abono inicial debe estar entre cero y el total de la venta' });
+    return;
+  }
+
+  // Pagos: una o varias formas de pago (contado o abono inicial de crédito)
+  let pagos = [];
+  if (abono_inicial > 0) {
+    const resPagos = obtenerPagos(abono_inicial);
+    if (resPagos.error) {
+      Toast.fire({ icon: 'warning', title: resPagos.error });
+      return;
+    }
+    pagos = resPagos.pagos;
+  }
+  const mixto = pagos.length > 1;
+
+  // El cambio solo aplica con una forma de pago; con pagos mixtos los montos deben ser exactos
+  const pagoCon = tipo_venta === 'credito'
+    ? abono_inicial
+    : (mixto ? total : (parseFloat(document.getElementById('pos-pago-con').value) || total));
+
+  if (tipo_venta === 'contado' && centavos(pagoCon) < centavos(total)) {
+    Swal.fire({
+      icon: 'warning',
+      title: 'Monto insuficiente',
+      text: `El monto recibido ($${pagoCon.toFixed(2)}) es menor que el total de la venta ($${total.toFixed(2)})`
+    });
+    return;
+  }
+
+  const cambio = tipo_venta === 'contado' ? round2(pagoCon - total) : 0;
+
+  const lineaPago = (p) => `${esc(p.nombre)}: $${p.monto.toFixed(2)}${p.referencia ? ' (ref. ' + esc(p.referencia) + ')' : ''}`;
+  const desgloseConfirm = pagos.length ? pagos.map(lineaPago).join('<br>') : 'Pendiente de abono';
+  const desgloseTicket = pagos.length
+    ? pagos.map((p) => `<div class="d-flex justify-content-between"><span>${esc(p.nombre)}</span><span>$${p.monto.toFixed(2)}</span></div>`).join('')
+    : '<div>Pendiente de abono</div>';
+
+  Swal.fire({
+    title: 'Confirmar Cobro',
+    html: `
+      <div class="text-start">
+        <p><strong>Descuentos:</strong> -$${(resumen.descuento_productos+resumen.descuento_general).toFixed(2)}</p>
+        <p><strong>Cliente:</strong> ${clienteNombre}</p>
+        <p><strong>Tipo de venta:</strong> ${tipo_venta === 'credito' ? 'Crédito' : 'Contado'}</p>
+        <p><strong>Forma de Pago:</strong><br>${desgloseConfirm}</p>
+        <h3 class="text-center text-success my-3">Total: $${total.toFixed(2)}</h3>
+        <p><strong>${tipo_venta === 'credito' ? 'Abono inicial:' : 'Paga con:'}</strong> $${pagoCon.toFixed(2)}</p>
+        ${tipo_venta === 'credito' ? `<p><strong>Saldo pendiente:</strong> $${(total - pagoCon).toFixed(2)}</p>` : `<p><strong>Cambio:</strong> $${cambio.toFixed(2)}</p>`}
+      </div>`,
+    showCancelButton: true,
+    confirmButtonText: 'Confirmar Venta',
+    cancelButtonText: 'Regresar'
+  }).then((r) => {
+    if (!r.isConfirmed) return;
+
+    const payload = {
+      id_cliente,
+      tipo_venta,
+      abono_inicial,
+      fecha_venta,
+      items: carrito.map(it => ({id:it.id, cantidad:it.cantidad, descuento:it.descuento||0})),
+      descuento_general: resumen.descuento_general,
+      pagos: pagos.map(({ id_forma_pago, monto, referencia }) => ({ id_forma_pago, monto, referencia }))
+    };
+
+    $.ajax({
+      url: BASE_URL + 'api/punto_venta.php?tipo=cobrar',
+      type: 'POST',
+      contentType: 'application/json',
+      data: JSON.stringify(payload),
+      dataType: 'json',
+      success: function (resp) {
+        if (!resp.estatus) {
+          Swal.fire({ icon: 'error', title: 'Error al cobrar', text: resp.mensaje });
+          return;
+        }
+
+        let itemsTicket = '';
+        (resp.items || carrito).forEach((it) => {
+          itemsTicket += `
+            <tr>
+              <td>${it.cantidad} x ${esc(it.nombre)}</td>
+              <td class="text-end">$${Number(it.importe ?? it.precio*it.cantidad).toFixed(2)}</td>
+            </tr>`;
+        });
+
+        Swal.fire({
+          icon: 'success',
+          title: '¡Venta Realizada con Éxito!',
+          html: `
+            <div class="border p-3 rounded text-start" id="ticket-impresion" style="font-family: monospace; font-size: 13px;">
+              <div class="text-center fw-bold">FERRETERÍA PIKERO</div>
+              <div class="text-center text-muted">Ticket de Venta</div>
+              <hr class="my-1">
+              <div>Folio: <strong>${resp.folio}</strong></div>
+              <div>Cliente: ${clienteNombre}</div>
+              <div>Tipo de venta: ${tipo_venta === 'credito' ? 'Crédito' : 'Contado'}</div>
+              <div>Forma de pago:</div>
+              ${desgloseTicket}
+              <hr class="my-1">
+              <table class="w-100">
+                ${itemsTicket}
+              </table>
+              <hr class="my-1">
+              <div class="d-flex justify-content-between fw-bold fs-6">
+                <span>TOTAL:</span>
+                <span>$${parseFloat(resp.total).toFixed(2)}</span>
+              </div>
+              <div class="d-flex justify-content-between text-muted"><span>${tipo_venta === 'credito' ? 'Abono inicial:' : 'Recibido:'}</span><span>$${pagoCon.toFixed(2)}</span></div>
+              ${tipo_venta === 'credito' ? `<div class="d-flex justify-content-between fw-bold"><span>Saldo pendiente:</span><span>$${(total - pagoCon).toFixed(2)}</span></div>` : `<div class="d-flex justify-content-between text-muted"><span>Cambio:</span><span>$${cambio.toFixed(2)}</span></div>`}
+              <div class="text-center mt-3 text-muted">¡Gracias por su compra!</div>
+            </div>`,
+          confirmButtonText: '<i class="fa-solid fa-print me-1"></i> Imprimir y Continuar',
+          showDenyButton: true,
+          denyButtonText: '<i class="fa-solid fa-file-invoice me-1"></i> Facturar recibo',
+          showCancelButton: true,
+          cancelButtonText: 'Continuar sin imprimir'
+        }).then((result) => {
+          if (result.isDenied) {
+            abrirFormularioFactura(resp.id_venta);
+          } else if (result.isConfirmed) {
+
+            if(resp.tipo_reporte === 1) {
+            const printContent = document.getElementById('ticket-impresion').innerHTML;
+            const printWindow = window.open('', '', 'width=400,height=600');
+            printWindow.document.write(`<html><head><title>Ticket ${resp.folio}</title><style>body{font-family:monospace;padding:10px;}</style></head><body>${printContent}</body></html>`);
+            printWindow.document.close();
+            setTimeout(() => {
+            printWindow.focus(); 
+            printWindow.print();
+            printWindow.close();
+          }, 250);
+            }else if(resp.tipo_reporte === 2) {
+                window.open(BASE_URL + 'api/ventas.php?tipo=pdf&id=' + resp.id_venta, '_blank');
+            }
+          }
+
+          // Reset carrito
+          carrito = [];
+          $('#pos-descuento-general').val('0');
+          document.getElementById('pos-pago-con').value = '';
+          limpiarPagosCapturados();
+          renderCarrito();
+        });
+      },
+      error: function () {
+        Swal.fire({ icon: 'error', title: 'Error de conexión con el servidor' });
+      }
+    });
+  });
+}
+
+$(document).ready(function () {
+  // Se inserta sin necesitar el archivo de la vista HTML.
+  $('#pos-items-body').closest('table').find('thead tr th').eq(3).before('<th>Desc. $</th>');
+  $('#pos-total').closest('div').before(`
+    <div class="mb-2"><label for="pos-descuento-general" class="form-label">Descuento general ($)</label>
+    <input id="pos-descuento-general" type="number" min="0" step="0.01" value="0" class="form-control form-control-sm">
+    <div class="d-flex justify-content-between small mt-1"><span>Descuentos aplicados</span><strong id="pos-descuentos-resumen">-$0.00</strong></div>
+    </div>`);
+  $('#pos-descuento-general').on('input', () => { renderCarrito(); });
+  cargarCatalogos();
+
+  $('#pos-forma-pago').on('change', setearFormaPago);
+  $(document).on('input', '.input-forma-pago', actualizarRestantePagos);
+  $(document).on('click', '.btn-completar-pago', function () {
+    const id = $(this).data('id');
+    let otros = 0;
+    $('.input-forma-pago').each(function () {
+      if ($(this).data('id') !== id) otros += parseFloat($(this).val()) || 0;
+    });
+    const resto = Math.max(0, round2(obtenerMontoACobrar() - otros));
+    $(`.input-forma-pago[data-id="${id}"]`).val(resto.toFixed(2));
+    actualizarRestantePagos();
+  });
+
+  const buscador = document.getElementById('pos-buscador');
+
+  buscador.addEventListener('input', function () {
+    clearTimeout(searchTimeout);
+    const val = this.value;
+    searchTimeout = setTimeout(() => buscarProductos(val), 200);
+  });
+
+  buscador.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const val = this.value.trim();
+      if (!val) return;
+
+      // Buscar coincidencia exacta por código o primer resultado
+      $.get(BASE_URL + 'api/punto_venta.php?tipo=buscar&q=' + encodeURIComponent(val), function (resp) {
+        if (resp.estatus && resp.data && resp.data.length > 0) {
+          agregarProductoAlCarrito(resp.data[0]);
+        } else {
+          Toast.fire({ icon: 'warning', title: 'Producto no encontrado' });
+        }
+      }, 'json');
+    }
+  });
+
+  document.getElementById('btn-buscar-pos').addEventListener('click', function () {
+    buscarProductos(buscador.value);
+  });
+
+  document.getElementById('pos-pago-con').addEventListener('input', calcularCambio);
+  document.getElementById('pos-tipo-venta').addEventListener('change', function() {
+    const esCredito = this.value === 'credito';
+    document.getElementById('bloque-abono-inicial').classList.toggle('d-none', !esCredito);
+    actualizarVisibilidadEfectivo();
+    if (esCredito && $('#pos-cliente option:selected').data('publico') === 1) {
+      $('#pos-cliente').val(clientes.find((cliente) => Number(cliente.es_publico) !== 1)?.id || '');
+    }
+    actualizarTotales();
+  });
+  document.getElementById('pos-abono-inicial').addEventListener('input', actualizarTotales);
+  document.getElementById('btn-cobrar-pos').addEventListener('click', procesarCobro);
+  document.getElementById('btn-vaciar-carrito').addEventListener('click', function () {
+    if (carrito.length === 0) return;
+    Swal.fire({
+      icon: 'question',
+      title: '¿Vaciar carrito?',
+      showCancelButton: true,
+      confirmButtonText: 'Sí, vaciar',
+      cancelButtonText: 'Cancelar'
+    }).then((r) => {
+      if (r.isConfirmed) {
+        carrito = [];
+        $('#pos-descuento-general').val('0');
+        renderCarrito();
+      }
+    });
+  });
+
+  // Atajo F2 para cobrar
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'F2') {
+      e.preventDefault();
+      procesarCobro();
+    }
+  });
+
+  // Ocultar resultados si se hace click fuera
+  document.addEventListener('click', function (e) {
+    if (!e.target.closest('#pos-buscador') && !e.target.closest('#pos-resultados')) {
+      document.getElementById('pos-resultados').style.display = 'none';
+    }
+  });
+});
