@@ -1039,7 +1039,7 @@ export function abrirFormularioFactura(
                   title: "Sustitución pendiente",
                   text: r.mensaje,
                 });
-              else abrirAccionesFactura(idVenta, res.value.correo);
+              else abrirAccionesFactura(idVenta, res.value.correo, { metodoPago: res.value.metodo_pago });
             })
             .fail(() =>
               Swal.fire({

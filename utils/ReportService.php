@@ -23,7 +23,7 @@ class ReportService {
             'default' => 'c.fecha_registro'
         ],
         'ventas' => [
-            'select' => "v.id, v.folio, v.fecha_registro, COALESCE(c.nombre, 'Público en general') AS cliente, fp.nombre AS forma_pago, v.tipo_venta, v.total, CASE WHEN v.tipo_venta = 'credito' THEN GREATEST(v.total - COALESCE((SELECT SUM(a.monto) FROM abonos_venta a WHERE a.id_venta = v.id), 0), 0) ELSE 0 END AS saldo_pendiente, v.estatus_factura, v.estatus, CONCAT(u.nombre, ' ', u.apellido) AS cajero",
+            'select' => "v.id, v.folio, v.fecha_registro, COALESCE(c.nombre, 'Público en general') AS cliente, v.factura_metodo_pago, fp.nombre AS forma_pago, v.tipo_venta, v.total, CASE WHEN v.tipo_venta = 'credito' THEN GREATEST(v.total - COALESCE((SELECT SUM(a.monto) FROM abonos_venta a WHERE a.id_venta = v.id), 0), 0) ELSE 0 END AS saldo_pendiente, v.estatus_factura, v.estatus, CONCAT(u.nombre, ' ', u.apellido) AS cajero",
             'from' => 'ventas v LEFT JOIN clientes c ON c.id = v.id_cliente LEFT JOIN formas_pago fp ON fp.id = v.id_forma_pago LEFT JOIN usuarios u ON u.id = v.id_usuario',
             'scope' => 'v.id_ferreteria = :ferreteria AND v.id_sucursal = :sucursal', 'date' => 'v.fecha_registro',
             'search' => ['v.folio', 'c.nombre', 'fp.nombre', 'u.nombre', 'u.apellido'],

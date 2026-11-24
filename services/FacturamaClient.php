@@ -95,79 +95,78 @@ class FacturamaClient
     }
 
     public function facturar(string $clientId, int $issuerId, array $cfdiPayload, array $delivery = []): array
-{
-    if ($clientId === '' || $issuerId <= 0) {
-        return [
-            'estatus' => false,
-            'http_code' => 400,
-            'mensaje' => 'No se pudo validar la empresa o el emisor seleccionado.'
+    {
+        if ($clientId === '' || $issuerId <= 0) {
+            return [
+                'estatus' => false,
+                'http_code' => 400,
+                'mensaje' => 'No se pudo validar la empresa o el emisor seleccionado.'
+            ];
+        }
+
+        $requestPayload = [
+            'client_id' => $clientId,
+            'issuer_id' => $issuerId,
+            'cfdi_payload' => $cfdiPayload
         ];
-    }
 
-    $requestPayload = [
-        'client_id' => $clientId,
-        'issuer_id' => $issuerId,
-        'cfdi_payload' => $cfdiPayload
-    ];
+        if ($delivery !== []) {
+            $requestPayload['delivery'] = $delivery;
+        }
 
-    if ($delivery !== []) {
-        $requestPayload['delivery'] = $delivery;
-    }
+        $response = $this->request('POST', '/facturar.php', $requestPayload);
 
-    $response = $this->request('POST', '/facturar.php', $requestPayload);
+        if (!$response['ok'] || !($response['body']['estatus'] ?? false)) {
 
-   if (!$response['ok'] || !($response['body']['estatus'] ?? false)) {
+            $mensaje = 'No fue posible emitir la factura. Verifica los datos fiscales e inténtalo de nuevo.';
 
-    $mensaje = 'No fue posible emitir la factura. Verifica los datos fiscales e inténtalo de nuevo.';
+            // Respuesta recibida del microservicio.
+            $body = $response['body'] ?? [];
 
-    // Respuesta recibida del microservicio.
-    $body = $response['body'] ?? [];
+            // Buscar los errores de validación en la estructura real.
+            $modelState = $body['detalles']['ModelState'] ?? [];
 
-    // Buscar los errores de validación en la estructura real.
-    $modelState = $body['detalles']['ModelState'] ?? [];
+            // Compatibilidad con posibles respuestas anidadas.
+            if (empty($modelState)) {
+                $modelState = $body['response']['body']['detalles']['ModelState'] ?? [];
+            }
 
-    // Compatibilidad con posibles respuestas anidadas.
-    if (empty($modelState)) {
-        $modelState = $body['response']['body']['detalles']['ModelState'] ?? [];
-    }
+            if (is_array($modelState) && !empty($modelState)) {
 
-    if (is_array($modelState) && !empty($modelState)) {
+                $errores = [];
 
-        $errores = [];
+                foreach ($modelState as $campo => $mensajes) {
+                    foreach ((array) $mensajes as $detalle) {
+                        if (is_string($detalle) && trim($detalle) !== '') {
+                            $errores[] = trim($detalle);
+                        }
+                    }
+                }
 
-        foreach ($modelState as $campo => $mensajes) {
-            foreach ((array) $mensajes as $detalle) {
-                if (is_string($detalle) && trim($detalle) !== '') {
-                    $errores[] = trim($detalle);
+                if (!empty($errores)) {
+                    $mensaje = implode(' ', array_unique($errores));
+                }
+            } else {
+                // Si no existen errores específicos, utilizar el mensaje general.
+                $mensajeGeneral = $body['mensaje'] ?? null;
+
+                if (is_string($mensajeGeneral) && trim($mensajeGeneral) !== '') {
+                    $mensaje = trim($mensajeGeneral);
                 }
             }
+
+            return [
+                'estatus' => false,
+                'http_code' => (int) ($response['status'] ?? 0),
+                'mensaje' => $mensaje
+            ];
         }
 
-        if (!empty($errores)) {
-            $mensaje = implode(' ', array_unique($errores));
-        }
-
-    } else {
-        // Si no existen errores específicos, utilizar el mensaje general.
-        $mensajeGeneral = $body['mensaje'] ?? null;
-
-        if (is_string($mensajeGeneral) && trim($mensajeGeneral) !== '') {
-            $mensaje = trim($mensajeGeneral);
-        }
+        return [
+            'estatus' => true,
+            'data' => $response['body']['data'] ?? $response['body']
+        ];
     }
-
-    return [
-        'estatus' => false,
-        'http_code' => (int) ($response['status'] ?? 0),
-        'mensaje' => $mensaje
-    ];
-}
-
-    return [
-        'estatus' => true,
-        'data' => $response['body']['data'] ?? $response['body']
-    ];
-}
 
     public function descargarCfdi(string $clientId, int $issuerId, string $cfdiId, string $formato): array
     {
@@ -227,49 +226,71 @@ class FacturamaClient
         return ['estatus' => true, 'mensaje' => $response['body']['mensaje'] ?? 'Factura enviada correctamente'];
     }
 
-  public function cancelarCfdi(string $clientId, int $issuerId, string $cfdiId, string $motivo, string $uuidSustituto = ''): array
-{
-    if ($this->baseUrl === '' || $this->apiKey === '') {
-        return ['estatus' => false, 'mensaje' => 'El servicio de facturación no está configurado'];
-    }
+    public function cancelarCfdi(string $clientId, int $issuerId, string $cfdiId, string $motivo, string $uuidSustituto = ''): array
+    {
+        if ($this->baseUrl === '' || $this->apiKey === '') {
+            return ['estatus' => false, 'mensaje' => 'El servicio de facturación no está configurado'];
+        }
 
-    $response = $this->request('POST', '/cancelar.php', [
-        'client_id'        => $clientId,
-        'issuer_id'        => $issuerId,
-        'id'               => $cfdiId,
-        'motive'           => $motivo,
-        'uuid_replacement' => $uuidSustituto,
-    ]);
+        $response = $this->request('POST', '/cancelar.php', [
+            'client_id'        => $clientId,
+            'issuer_id'        => $issuerId,
+            'id'               => $cfdiId,
+            'motive'           => $motivo,
+            'uuid_replacement' => $uuidSustituto,
+        ]);
 
-    if (!$response['ok'] || !($response['body']['estatus'] ?? false)) {
+        if (!$response['ok'] || !($response['body']['estatus'] ?? false)) {
+            return [
+                'estatus'   => false,
+                'http_code' => (int)($response['status'] ?? 0),
+                'mensaje'   => trim((string)($response['body']['mensaje'] ?? '')) ?: 'No se pudo cancelar la factura.'
+            ];
+        }
+
+        $body = $response['body'] ?? [];
+
+        $satStatus = strtolower(
+            trim((string)($body['sat_status'] ?? ''))
+        );
+
+        if (!in_array($satStatus, [
+            'canceled',
+            'pending',
+            'active'
+        ], true)) {
+            $satStatus = 'unknown';
+        }
+
         return [
-            'estatus'   => false,
-            'http_code' => (int)($response['status'] ?? 0),
-            'mensaje'   => trim((string)($response['body']['mensaje'] ?? '')) ?: 'No se pudo cancelar la factura.'
+            'estatus' => true,
+            'sat_status' => $satStatus,
+            'mensaje' => $body['mensaje']
+                ?? 'Solicitud procesada; verifica el estado SAT.'
         ];
     }
 
-   $body = $response['body'] ?? [];
-
-$satStatus = strtolower(
-    trim((string)($body['sat_status'] ?? ''))
-);
-
-if (!in_array($satStatus, [
-    'canceled',
-    'pending',
-    'active'
-], true)) {
-    $satStatus = 'unknown';
-}
-
-return [
-    'estatus' => true,
-    'sat_status' => $satStatus,
-    'mensaje' => $body['mensaje']
-        ?? 'Solicitud procesada; verifica el estado SAT.'
-];
-}
+    public function consultarEstatusCfdi(string $clientId, int $issuerId, string $cfdiId): array
+    {
+        if ($clientId === '' || $issuerId <= 0 || $cfdiId === '') {
+            return ['estatus' => false, 'mensaje' => 'Los datos para consultar el estatus no son válidos'];
+        }
+        $response = $this->request('POST', '/estatus.php', [
+            'client_id' => $clientId,
+            'issuer_id' => $issuerId,
+            'id'        => $cfdiId,
+        ]);
+        if (!$response['ok'] || !($response['body']['estatus'] ?? false)) {
+            return [
+                'estatus'   => false,
+                'http_code' => (int)($response['status'] ?? 0),
+                'mensaje'   => trim((string)($response['body']['mensaje'] ?? '')) ?: 'No se pudo consultar el estatus del CFDI.'
+            ];
+        }
+        $sat = strtolower(trim((string)($response['body']['sat_status'] ?? '')));
+        if (!in_array($sat, ['active', 'canceled', 'pending', 'rejected'], true)) $sat = 'unknown';
+        return ['estatus' => true, 'sat_status' => $sat];
+    }
 
     // ---------------------------------------------------------------
     // 2) Método nuevo: consulta por Folio + Date en el microservicio
@@ -285,12 +306,12 @@ return [
         ]);
 
         if (!$response['ok'] || !($response['body']['estatus'] ?? false)) {
-            return ['estatus' => false, 'http_code' => (int)($response['status'] ?? 0), 'mensaje'=>$response['body']['mensaje'] ?? 'Error de comunicación', 'resp' => $response];
+            return ['estatus' => false, 'http_code' => (int)($response['status'] ?? 0), 'mensaje' => $response['body']['mensaje'] ?? 'Error de comunicación', 'resp' => $response];
         }
         // data = null si no existe; ['Id' => ..., 'TaxStamp' => ['Uuid' => ...]] si existe
         return ['estatus' => true, 'data' => $response['body']['data'] ?? null];
     }
-    
+
     private function request(string $method, string $path, ?array $payload = null): array
     {
         if ($this->baseUrl === '' || $this->apiKey === '') {

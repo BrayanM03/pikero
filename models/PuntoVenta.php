@@ -391,6 +391,22 @@ class PuntoVenta
                 $utilidad_abono = 0.0;
             }
 
+           
+             $estatus_venta = 1; // 1 = Activa, 2 = Pendiente de pago, 3 = Abonada parcialmente
+             if ($tipo_venta === 'credito' && $abono_inicial > 0) {
+                $estatus_venta = 3; 
+             }else if($tipo_venta === 'credito' && $abono_inicial == 0){
+                $estatus_venta = 2; // Pendiente de pago
+             }else if($tipo_venta == 'credito' && $abono_inicial > $total){
+                return ['estatus' => false, 'mensaje' => 'El abono inicial no puede superar el total de la venta'];
+             }else if($tipo_venta == 'credito' && $abono_inicial == $total){
+                $estatus_venta = 1;
+             }else if($abono_inicial < 0){
+                return ['estatus' => false, 'mensaje' => 'El abono inicial no puede ser negativo'];
+             }else{
+                $estatus_venta = 9; // Contado
+             }
+           
             $utilidad_total = array_sum(array_column($itemsValidados, 'utilidad'));
             $id_venta = $this->db->insert('ventas', [
                 'id_ferreteria' => $this->id_ferreteria,
@@ -405,7 +421,7 @@ class PuntoVenta
                 'costo' => $costo_total_venta,
                 'utilidad' => $utilidad_total,
                 'tipo_venta' => $tipo_venta,
-                'estatus' => 1,
+                'estatus' => $estatus_venta,
                 'fecha_registro' => $fecha_venta
             ]);
 

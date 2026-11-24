@@ -24,7 +24,7 @@ class Panel {
                 COALESCE(SUM(costo), 0) AS costo,
                 COALESCE(SUM(utilidad), 0) AS utilidad,
                 COALESCE(SUM(total), 0) AS total
-             FROM ventas WHERE id_ferreteria = ? AND id_sucursal = ? AND estatus = 1
+             FROM ventas WHERE id_ferreteria = ? AND id_sucursal = ? AND estatus <> 0
              AND fecha_registro >= ? AND fecha_registro < ?',
             $params
         );
@@ -58,7 +58,7 @@ class Panel {
                 INNER JOIN cajas c ON c.id = dp.id_caja
                 LEFT JOIN abonos_venta a ON a.id = dp.id_abono_venta
                 JOIN ventas v ON v.id = COALESCE(dp.id_venta, a.id_venta)
-                WHERE dp.id_ferreteria = ? AND dp.id_sucursal = ? AND v.estatus = 1
+                WHERE dp.id_ferreteria = ? AND dp.id_sucursal = ? AND v.estatus <> 0
                 AND dp.fecha_registro >= ? AND dp.fecha_registro < ?
                 AND c.estado ='abierta' AND c.id_usuario = ?
                 GROUP BY fp.id, fp.nombre
@@ -141,7 +141,7 @@ class Panel {
         };
         $series = $this->db->select(
             "SELECT {$group} AS bucket, COUNT(*) AS cantidad, COALESCE(SUM(total), 0) AS total
-             FROM ventas WHERE id_ferreteria = ? AND id_sucursal = ? AND estatus = 1
+             FROM ventas WHERE id_ferreteria = ? AND id_sucursal = ? AND estatus <> 0
              AND fecha_registro >= ? AND fecha_registro < ? GROUP BY bucket ORDER BY bucket ASC",
             [$this->id_ferreteria, $this->id_sucursal, $inicio->format('Y-m-d H:i:s'), $fin->format('Y-m-d H:i:s')]
         );
