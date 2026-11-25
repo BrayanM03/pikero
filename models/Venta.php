@@ -6,6 +6,7 @@ require_once __DIR__ . '/../utils/Tenant.php';
 require_once __DIR__ . '/../services/FacturamaClient.php';
 require_once __DIR__ . '/../services/InvoiceMailer.php';
 require_once __DIR__ . '/../services/CfdiConceptEditor.php';
+use App\Services\CfdiConceptEditor; // Ajusta el namespace según corresponda a tu estructura
 
 class Venta extends Datatable
 {

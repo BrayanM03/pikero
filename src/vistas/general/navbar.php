@@ -90,7 +90,8 @@ $user_P = $permisos_usuario['data'] ?? [];
 		can_edit_ferreterias: <?php echo $controller_permiso->validarAcceso(2, CPERMISO::EDITAR_FERRETERIAS->value)['estatus'] && ($_SESSION['rol_slug'] ?? '') === 'superadmin' ? 'true' : 'false'; ?>,
 		can_cancel_ferreterias: <?php echo $controller_permiso->validarAcceso(2, CPERMISO::CANCELAR_FERRETERIAS->value)['estatus'] && ($_SESSION['rol_slug'] ?? '') === 'superadmin' ? 'true' : 'false'; ?>
 	};
-	const permisos_usuario = <?= json_encode($user_P,  JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);?>
+	const permisos_usuario = <?=  json_encode($user_P,  JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);?>;
+	const perfil_sesion = <?php echo json_encode($_SESSION); ?>;
 
 	document.addEventListener('DOMContentLoaded', function() {
 		const THEME_KEY = 'adminkit_theme';

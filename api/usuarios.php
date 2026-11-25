@@ -29,5 +29,5 @@ if ($tipo == 'actualizar_perfil') {
 }
 
 if ($tipo == 'cambiar_ferreteria_activa') {
-    $controller->cambiar_ferreteria_activa(1, $_POST['id_ferreteria'] ?? 0);
+    $controller->cambiar_ferreteria_activa(1, $_POST ?? []);
 }

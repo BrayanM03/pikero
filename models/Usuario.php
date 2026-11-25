@@ -1,28 +1,32 @@
-<?php 
+<?php
 require_once __DIR__ . '/../config/conexion.php';
 require_once __DIR__ . '/../config/dates.php';
 require_once __DIR__ . '/../models/Datatable.php';
 require_once __DIR__ . '/../utils/Tenant.php';
 
-class Usuario extends Datatable {
+class Usuario extends Datatable
+{
     private $tabla_usuarios = 'vista_usuarios';
     private $fecha;
     private $id_ferreteria;
 
-    public function __construct($id_ferreteria = null) {
+    public function __construct($id_ferreteria = null)
+    {
         $this->db = new Database();
         $this->fecha = new Date();
         $this->id_ferreteria = $id_ferreteria ?? Tenant::idFerreteria();
     }
 
-    private function filtroTenant() {
+    private function filtroTenant()
+    {
         return [
             'where' => 'id_ferreteria = :id_ferreteria',
             'params' => [':id_ferreteria' => $this->id_ferreteria]
         ];
     }
 
-    public function datatablesUsuarios($id_filtro, $start, $length, $search, $orderColumn, $orderDir) {
+    public function datatablesUsuarios($id_filtro, $start, $length, $search, $orderColumn, $orderDir)
+    {
         $filtro = $this->filtroTenant();
         return $this->getDataTable(
             $this->tabla_usuarios,
@@ -37,17 +41,20 @@ class Usuario extends Datatable {
         );
     }
 
-    public function contarUsuarios($id_filtro) {
+    public function contarUsuarios($id_filtro)
+    {
         $filtro = $this->filtroTenant();
         return $this->countAll($this->tabla_usuarios, $filtro['where'], $filtro['params']);
     }
- 
-    public function contarUsuariosFiltrados($id_filtro, $search) {
+
+    public function contarUsuariosFiltrados($id_filtro, $search)
+    {
         $filtro = $this->filtroTenant();
         return $this->countFiltered($this->tabla_usuarios, $search, ['nombre', 'apellido', 'usuario'], $filtro['where'], $filtro['params']);
     }
 
-    public function registrarUsuario($nombre, $apellidos, $id_sucursal, $telefono, $usuario, $password, $rol, $cargo, $correo = '', $id_ferreteria = null) {
+    public function registrarUsuario($nombre, $apellidos, $id_sucursal, $telefono, $usuario, $password, $rol, $cargo, $correo = '', $id_ferreteria = null)
+    {
         $id_ferreteria = $id_ferreteria ?? $this->id_ferreteria;
         $ferreteria_ok = $this->db->select(
             'SELECT id FROM ferreterias WHERE id = ? AND estatus = 1',
@@ -115,7 +122,8 @@ class Usuario extends Datatable {
         ];
     }
 
-    public function obtenerPorUsuario($username) {
+    public function obtenerPorUsuario($username)
+    {
         $stmt = $this->db->query(
             "SELECT u.*, r.nombre as nombre_rol, r.slug as slug_rol,
                     s.nombre as sucursal, s.logo as logo_sucursal,
@@ -131,7 +139,8 @@ class Usuario extends Datatable {
         return $stmt->fetch(PDO::FETCH_ASSOC);
     }
 
-    public function obtenerPorIDUsuario($id_usuario) {
+    public function obtenerPorIDUsuario($id_usuario)
+    {
         $params = [$id_usuario];
         $sql = "SELECT u.*, r.nombre as nombre_rol, r.slug as slug_rol,
                     s.nombre as sucursal, s.logo as logo_sucursal,
@@ -149,7 +158,8 @@ class Usuario extends Datatable {
         return $stmt->fetch(PDO::FETCH_ASSOC);
     }
 
-    public function obtenerPerfil($id_usuario) {
+    public function obtenerPerfil($id_usuario)
+    {
         $stmt = $this->db->query(
             "SELECT u.id, u.nombre, u.apellido, u.telefono, u.correo, u.cargo, u.usuario,
                     u.foto_perfil, u.id_ferreteria, u.id_sucursal,
@@ -164,7 +174,8 @@ class Usuario extends Datatable {
         return $stmt->fetch(PDO::FETCH_ASSOC);
     }
 
-    public function actualizarPerfil($id_usuario, array $data) {
+    public function actualizarPerfil($id_usuario, array $data)
+    {
         $perfil = $this->obtenerPerfil($id_usuario);
         if (!$perfil) {
             return ['estatus' => false, 'mensaje' => 'No se encontró el perfil'];
@@ -218,31 +229,43 @@ class Usuario extends Datatable {
         return ['estatus' => true, 'mensaje' => 'Perfil actualizado correctamente', 'data' => $this->obtenerPerfil($id_usuario)];
     }
 
-    public function obtenerFerreteriaActiva($id_ferreteria) {
-        $data = $this->db->select(
-            "SELECT f.id, f.nombre, f.logo,
-                    s.id AS id_sucursal, s.nombre AS sucursal, s.logo AS logo_sucursal
-             FROM ferreterias f
-             LEFT JOIN sucursales s ON s.id = (
-                 SELECT s2.id FROM sucursales s2
-                 WHERE s2.id_ferreteria = f.id AND s2.estatus = 1
-                 ORDER BY s2.id ASC LIMIT 1
-             )
-             WHERE f.id = ? AND f.estatus = 1",
+    public function obtenerFerreteriaConSucursales($id_ferreteria)
+    {
+        // 1. Obtener datos generales de la ferretería
+        $ferreteria = $this->db->select(
+            "SELECT id, nombre, logo FROM ferreterias WHERE id = ? AND estatus = 1 LIMIT 1",
             [$id_ferreteria]
         );
-        return $data[0] ?? null;
+
+        if (empty($ferreteria)) return null;
+
+        $ferra = $ferreteria[0];
+
+        // 2. Obtener todas las sucursales activas de esta ferretería
+        $sucursales = $this->db->select(
+            "SELECT id, nombre, logo FROM sucursales WHERE id_ferreteria = ? AND estatus = 1",
+            [$id_ferreteria]
+        );
+
+        $ferra['sucursales'] = $sucursales;
+        return $ferra;
     }
 
-    public function actualizarUsuario($id_usuario, $data_update) {
+    public function actualizarUsuario($id_usuario, $data_update)
+    {
         if ($this->id_ferreteria) {
-            return $this->db->update('usuarios', $data_update, 'id = ?', 
-            [$id_usuario]);
+            return $this->db->update(
+                'usuarios',
+                $data_update,
+                'id = ?',
+                [$id_usuario]
+            );
         }
         return $this->db->update('usuarios', $data_update, 'id = ?', [$id_usuario]);
     }
 
-    public function combo($sql_where = '') {
+    public function combo($sql_where = '')
+    {
         $params[':id_ferreteria'] = $this->id_ferreteria;
         $stmt = $this->db->query(
             "SELECT * FROM vista_usuarios WHERE estatus = 1 AND id_ferreteria = :id_ferreteria" . $sql_where . ' ORDER BY nombre ASC',

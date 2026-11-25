@@ -113,6 +113,7 @@ include 'vistas/general/header.php';
                                                 <option value="<?= (int)$ferreteria['id'] ?>" <?= (int)$ferreteria['id'] === $ferreteria_activa ? 'selected' : '' ?>><?= htmlspecialchars($ferreteria['nombre'], ENT_QUOTES, 'UTF-8') ?></option>
                                             <?php endforeach; ?>
                                         </select>
+                                        <div class="area_sucursales mt-3" id="area_sucursales"></div>
                                         <p class="form-text mt-2">El cambio aplica al contexto de esta sesión; tu cuenta superadmin no se reasigna.</p>
                                         <div class="text-end mt-3">
                                             <button class="btn btn-outline-primary" id="btn-cambiar-ferreteria" type="submit"><i data-feather="repeat" class="me-1"></i>Cambiar ferretería</button>
