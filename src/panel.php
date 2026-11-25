@@ -1,4 +1,4 @@
-<?php
+<?php 
 require_once __DIR__ . '/../models/Panel.php';
 $panel_model = new Panel();
 $resumen_panel = $panel_model->resumen()['data'];

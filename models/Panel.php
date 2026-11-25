@@ -15,7 +15,7 @@ class Panel {
         $this->id_usuario = $_SESSION['id'];
     }
 
-    public function resumen(): array {
+    public function resumen(): array { 
         $inicio = date('Y-m-d 00:00:00');
         $fin = date('Y-m-d 00:00:00', strtotime('+1 day'));
         $params = [$this->id_ferreteria, $this->id_sucursal, $inicio, $fin];

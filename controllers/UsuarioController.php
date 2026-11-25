@@ -5,36 +5,43 @@ require_once __DIR__ . '/../utils/FileHelper.php';
 require_once __DIR__ . '/../utils/Tenant.php';
 require_once __DIR__ . '/../controllers/DataTableController.php';
 
-class UsuarioController extends DataTableController {
+class UsuarioController extends DataTableController
+{
     private $id_sesion;
     protected $current_datatable;
     private $id_ferreteria;
 
-    public function __construct() {
+    public function __construct()
+    {
         $this->id_sesion = $_SESSION['id'] ?? null;
         $this->id_ferreteria = Tenant::idFerreteria();
         parent::__construct();
         $this->model = new Usuario($this->id_ferreteria);
     }
 
-    public function datatable_usuarios() {
+    public function datatable_usuarios()
+    {
         $this->current_datatable = 'vista_usuarios';
         $this->datatable_general();
     }
 
-    protected function getModelData($id_filtro, $start, $length, $search, $orderColumnName, $orderDir, $filtros) {
+    protected function getModelData($id_filtro, $start, $length, $search, $orderColumnName, $orderDir, $filtros)
+    {
         return $this->model->datatablesUsuarios($id_filtro, $start, $length, $search, $orderColumnName, $orderDir);
     }
 
-    protected function getModelTotal($id_filtro, $filtros) {
+    protected function getModelTotal($id_filtro, $filtros)
+    {
         return $this->model->contarUsuarios($id_filtro);
     }
 
-    protected function getModelFilteredTotal($id_filtro, $search, $filtros) {
+    protected function getModelFilteredTotal($id_filtro, $search, $filtros)
+    {
         return $this->model->contarUsuariosFiltrados($id_filtro, $search);
     }
 
-    public function obtener_usuario($tipo_resp, $id_usuario = null) {
+    public function obtener_usuario($tipo_resp, $id_usuario = null)
+    {
         $id_usuario = $id_usuario ?? ($_SESSION['id'] ?? null);
         $user_data = $this->model->obtenerPorIDUsuario($id_usuario);
         $resp = [
@@ -48,7 +55,8 @@ class UsuarioController extends DataTableController {
         echo json_encode($resp);
     }
 
-    public function actualizar_perfil($tipo_resp, $data) {
+    public function actualizar_perfil($tipo_resp, $data)
+    {
         $id_usuario = $_SESSION['id'] ?? null;
         $response = $id_usuario
             ? $this->model->actualizarPerfil($id_usuario, $data)
@@ -69,24 +77,54 @@ class UsuarioController extends DataTableController {
         echo json_encode($response);
     }
 
-    public function cambiar_ferreteria_activa($tipo_resp, $id_ferreteria) {
+    public function cambiar_ferreteria_activa($tipo_resp, $data)
+    {
+        $id_ferreteria = $data['id_ferreteria'] ?? null;
+        $id_sucursal = $data['sucursal_activa'] ?? null;
+
         if (empty($_SESSION['id'])) {
             $response = ['estatus' => false, 'mensaje' => 'La sesión expiró'];
         } elseif (!Tenant::esSuperAdmin()) {
             $response = ['estatus' => false, 'mensaje' => 'No tienes permiso para cambiar de ferretería'];
         } else {
-            $ferreteria = $this->model->obtenerFerreteriaActiva((int)$id_ferreteria);
+            // Llamamos al método que trae la ferretería y sus sucursales
+            $ferreteria = $this->model->obtenerFerreteriaConSucursales((int)$id_ferreteria);
+
             if (!$ferreteria) {
                 $response = ['estatus' => false, 'mensaje' => 'La ferretería seleccionada no está disponible'];
             } else {
-                $this->model->actualizarUsuario($_SESSION['id'], ['id_ferreteria' => (int)$ferreteria['id']]);
-                $_SESSION['id_ferreteria'] = (int)$ferreteria['id'];
-                $_SESSION['ferreteria'] = $ferreteria['nombre'];
-                $_SESSION['logo_ferreteria'] = $ferreteria['logo'] ?? '';
-                $_SESSION['id_sucursal'] = $ferreteria['id_sucursal'] ? (int)$ferreteria['id_sucursal'] : null;
-                $_SESSION['sucursal'] = $ferreteria['sucursal'] ?? '';
-                $_SESSION['logo_sucursal'] = $ferreteria['logo_sucursal'] ?? '';
-                $response = ['estatus' => true, 'mensaje' => 'Ferretería activa actualizada'];
+                // Verificamos si la sucursal enviada pertenece a las sucursales de la ferretería
+               
+                $contiene_sucursal = in_array((int)$id_sucursal, array_column($ferreteria['sucursales'], 'id'), true);
+
+                if (!$contiene_sucursal) {
+                    $response = ['estatus' => false, 'mensaje' => 'La sucursal seleccionada no está disponible en la ferretería'];
+                } else {
+                    // Buscamos los datos específicos de la sucursales elegida para guardar su nombre y logo en sesión
+                    $sucursalElegida = null;
+                    foreach ($ferreteria['sucursales'] as $s) {
+                        if ((int)$s['id'] === (int)$id_sucursal) {
+                            $sucursalElegida = $s;
+                            break;
+                        }
+                    }
+
+                    // Actualizamos en la base de datos el usuario
+                    $this->model->actualizarUsuario($_SESSION['id'], [
+                        'id_ferreteria' => (int)$ferreteria['id'],
+                        'id_sucursal' => (int)$id_sucursal
+                    ]);
+
+                    // Asignamos las variables de sesión de forma consistente
+                    $_SESSION['id_ferreteria'] = (int)$ferreteria['id'];
+                    $_SESSION['ferreteria'] = $ferreteria['nombre'];
+                    $_SESSION['logo_ferreteria'] = $ferreteria['logo'] ?? '';
+                    $_SESSION['id_sucursal'] = (int)$id_sucursal;
+                    $_SESSION['sucursal'] = $sucursalElegida['nombre'] ?? ''; // Guardamos el nombre o ID según tu lógica
+                    $_SESSION['logo_sucursal'] = $sucursalElegida['logo'] ?? '';
+
+                    $response = ['estatus' => true, 'mensaje' => 'Ferretería y sucursal activa actualizadas'];
+                }
             }
         }
 
@@ -96,11 +134,12 @@ class UsuarioController extends DataTableController {
         echo json_encode($response);
     }
 
-    public function registrar_usuario($tipo_resp, $data) {
+    public function registrar_usuario($tipo_resp, $data)
+    {
         $id_ferreteria = Tenant::esSuperAdmin()
             ? (int)($data['id_ferreteria'] ?? 0)
             : $this->id_ferreteria;
-            
+
         $response = $this->model->registrarUsuario(
             $data['nombre'] ?? '',
             $data['apellidos'] ?? '',
@@ -129,7 +168,8 @@ class UsuarioController extends DataTableController {
         echo json_encode($response);
     }
 
-    public function combo($tipo_resp) {
+    public function combo($tipo_resp)
+    {
         $data = $this->model->combo();
         if ($tipo_resp == 1) {
             echo json_encode($data);
@@ -138,7 +178,8 @@ class UsuarioController extends DataTableController {
         return $data;
     }
 
-    public function cancelar_usuario($tipo_resp, $id_usuario) {
+    public function cancelar_usuario($tipo_resp, $id_usuario)
+    {
         $filas = $this->model->actualizarUsuario($id_usuario, ['estatus' => 0]);
         $resp = ['estatus' => true, 'mensaje' => 'Usuario desactivado'];
         if ($tipo_resp == 2) {
@@ -147,7 +188,8 @@ class UsuarioController extends DataTableController {
         echo json_encode($resp);
     }
 
-    private function enviarRespuesta($data, $tipo) {
+    private function enviarRespuesta($data, $tipo)
+    {
         if ($tipo == 1) {
             echo json_encode($data);
             exit;
