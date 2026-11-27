@@ -1,7 +1,31 @@
 <?php 
 require_once __DIR__ . '/../models/Panel.php';
 $panel_model = new Panel();
-$resumen_panel = $panel_model->resumen()['data'];
+$filtros = array_intersect_key($_GET, array_flip(['periodo', 'fecha', 'inicio', 'fin', 'mes', 'anio']));
+$respuesta = $panel_model->resumen($filtros);
+$errorPeriodo = $respuesta['mensaje'] ?? null;
+if (!$respuesta['estatus']) {
+    $filtros = [];
+    $respuesta = $panel_model->resumen();
+}
+$resumen_panel = $respuesta['data'];
+$periodo = $resumen_panel['periodo'];
+$inicioPeriodo = $resumen_panel['inicio_periodo'];
+$ultimoDia = $resumen_panel['fin_periodo']?->modify('-1 day');
+$etiquetaPeriodo = match (true) {
+    $periodo === 'all' => ' de todo el historial',
+    $periodo === 'day' && $inicioPeriodo->format('Y-m-d') === date('Y-m-d') => ' de hoy',
+    $periodo === 'month' => ' de ' . $inicioPeriodo->format('m/Y'),
+    $periodo === 'year' => ' de ' . $inicioPeriodo->format('Y'),
+    $inicioPeriodo == $ultimoDia => ' del ' . $inicioPeriodo->format('d/m/Y'),
+    default => ' del ' . $inicioPeriodo->format('d/m/Y') . ' al ' . $ultimoDia->format('d/m/Y'),
+};
+$valorFiltro = fn(string $clave, string $valor) => htmlspecialchars(
+    is_string($filtros[$clave] ?? null) ? $filtros[$clave] : $valor,
+    ENT_QUOTES,
+    'UTF-8'
+);
+$consultaGrafica = http_build_query(['tipo' => 'grafica'] + $filtros);
 
 /* ---------- Helpers de presentación ---------- */
 $num   = fn($v) => (float)($v ?? 0);
@@ -11,12 +35,10 @@ $caja_abierta = !empty($resumen_panel['caja_abierta']);
 $caja         = $resumen_panel['caja'] ?? [];
 
 /* ---------- Tarjetas superiores ---------- */
-$ventas_hoy     = $num($resumen_panel['ventas_hoy'] ?? 0);
-$gastos_hoy     = $num($resumen_panel['gastos_hoy'] ?? 0);
-$costo_hoy      = $num($resumen_panel['costo_ventas_hoy'] ?? 0);
-$utilidad_bruta = $num($resumen_panel['utilidad'] ?? 0);//$ventas_hoy - $costo_hoy;
-$utilidad_hoy   = isset($resumen_panel['utilidad_hoy']) ? $num($resumen_panel['utilidad_hoy']) : ($utilidad_bruta - $gastos_hoy);
-$margen         = $ventas_hoy > 0 ? ($utilidad_hoy / $ventas_hoy) * 100 : 0;
+$ventas_periodo     = $num($resumen_panel['ventas_hoy'] ?? 0);
+$gastos_periodo     = $num($resumen_panel['gastos_hoy'] ?? 0);
+$utilidad_bruta = $num($resumen_panel['utilidad'] ?? 0);
+$margen         = $ventas_periodo > 0 ? ($utilidad_bruta / $ventas_periodo) * 100 : 0;
 
 $cred_total     = $num($resumen_panel['creditos_pendientes'] ?? 0);
 $cred_vencido   = $num($resumen_panel['creditos_vencidos'] ?? 0);
@@ -37,19 +59,17 @@ $ventas_efectivo = 0.00;
 $ventas_varias_fp = 0.00;
 
 foreach ($cobrado_forma_pago as $pago) {
-    $nombre = trim($pago['nombre']);
     $monto  = (float)$pago['total'];
 
-    if (strcasecmp($nombre, 'Efectivo') === 0) {
+    if ($pago['es_efectivo']) {
         $ventas_efectivo += $monto;
     } else {
         $ventas_varias_fp += $monto; // Acumula tarjeta, transferencia, cheque, etc.
     }
 }
-$gastos_efectivo = $num($caja['gastos_efectivo'] ?? 0) + $num($resumen_panel['gastos_hoy']);
-$efectivo_caja   = isset($caja['efectivo_esperado'])
-    ? $num($caja['efectivo_esperado'])
-    : ($fondo_inicial + $ventas_efectivo - $gastos_efectivo);
+$entradas_efectivo = $num($caja['total_entradas'] ?? 0);
+$salidas_efectivo = $num($caja['total_salidas'] ?? 0);
+$efectivo_caja = $fondo_inicial + $ventas_efectivo + $entradas_efectivo - $salidas_efectivo;
 
 /* ---------- Componente: lista de formas de pago ---------- */
 $iconos_pago = [
@@ -258,7 +278,6 @@ button.pk-card{ cursor:pointer; font:inherit; }
                                 </p>
                             </div>
                             <div class="d-flex flex-wrap gap-2">
-                                <span class="pk-chip"><i data-feather="calendar"></i><?= date('d/m/Y') ?></span>
                                 <span class="pk-chip <?= $caja_abierta ? '' : 'is-closed' ?>">
                                     <span class="pk-dot"></span>Caja <?= $caja_abierta ? 'abierta' : 'cerrada' ?>
                                 </span>
@@ -266,19 +285,56 @@ button.pk-card{ cursor:pointer; font:inherit; }
                         </div>
                     </div>
 
+                    <form method="get" id="panel-filtros" class="mb-3 d-flex flex-wrap align-items-end gap-2">
+                        <div>
+                            <label class="form-label small mb-1" for="panel-periodo">Periodo</label>
+                            <select id="panel-periodo" name="periodo" class="form-select form-select-sm">
+                                <option value="day" <?= $periodo === 'day' ? 'selected' : '' ?>>Día</option>
+                                <option value="range" <?= $periodo === 'range' ? 'selected' : '' ?>>Rango de días</option>
+                                <option value="week" <?= $periodo === 'week' ? 'selected' : '' ?>>Semana</option>
+                                <option value="month" <?= $periodo === 'month' ? 'selected' : '' ?>>Mes</option>
+                                <option value="year" <?= $periodo === 'year' ? 'selected' : '' ?>>Año</option>
+                                <option value="all" <?= $periodo === 'all' ? 'selected' : '' ?>>Todo el historial</option>
+                            </select>
+                        </div>
+                        <div id="filtro-dia">
+                            <label class="form-label small mb-1" for="panel-fecha">Fecha</label>
+                            <input id="panel-fecha" name="fecha" type="date" class="form-control form-control-sm" value="<?= $valorFiltro('fecha', date('Y-m-d')) ?>">
+                        </div>
+                        <div id="filtro-rango" class="d-none">
+                            <label class="form-label small mb-1" for="panel-inicio">Desde / hasta</label>
+                            <div class="d-flex gap-1">
+                                <input id="panel-inicio" name="inicio" type="date" class="form-control form-control-sm" value="<?= $valorFiltro('inicio', date('Y-m-01')) ?>">
+                                <input id="panel-fin" name="fin" type="date" class="form-control form-control-sm" value="<?= $valorFiltro('fin', date('Y-m-d')) ?>">
+                            </div>
+                        </div>
+                        <div id="filtro-mes" class="d-none">
+                            <label class="form-label small mb-1" for="panel-mes">Mes</label>
+                            <input id="panel-mes" name="mes" type="month" class="form-control form-control-sm" value="<?= $valorFiltro('mes', date('Y-m')) ?>">
+                        </div>
+                        <div id="filtro-anio" class="d-none">
+                            <label class="form-label small mb-1" for="panel-anio">Año</label>
+                            <input id="panel-anio" name="anio" type="number" min="2000" max="<?= date('Y') + 1 ?>" class="form-control form-control-sm" value="<?= $valorFiltro('anio', date('Y')) ?>">
+                        </div>
+                        <button type="submit" class="btn btn-sm btn-primary">Aplicar</button>
+                    </form>
+                    <?php if ($errorPeriodo): ?>
+                        <div class="alert alert-warning mt-2" role="alert"><?= htmlspecialchars($errorPeriodo) ?>. Se muestran los datos de hoy.</div>
+                    <?php endif; ?>
+
                     <!-- Tarjetas principales (clic = desglose) -->
                     <div class="row g-3 mb-3">
                         <div class="col-xl-3 col-md-6">
                             <button type="button" class="pk-card pk-clickable pk-a-green" data-bs-toggle="modal" data-bs-target="#modal-ventas">
                                 <div class="d-flex justify-content-between align-items-start gap-2">
                                     <div>
-                                        <p class="pk-label">Ventas de hoy</p>
-                                        <p class="pk-value"><?= $money($ventas_hoy) ?></p>
+                                        <p class="pk-label">Ventas<?= $etiquetaPeriodo ?></p>
+                                        <p class="pk-value"><?= $money($ventas_periodo) ?></p>
                                     </div>
                                     <span class="pk-icon"><i data-feather="shopping-bag"></i></span>
                                 </div>
                                 <div class="pk-foot">
-                                    <span><?= (int)($resumen_panel['cantidad_ventas_hoy'] ?? 0) ?> tickets completados</span>
+                                    <span><?= (int)($resumen_panel['cantidad_ventas_hoy'] ?? 0) ?> tickets registrados</span>
                                     <span class="pk-more">Ver pagos <i data-feather="chevron-right"></i></span>
                                 </div>
                             </button>
@@ -288,8 +344,8 @@ button.pk-card{ cursor:pointer; font:inherit; }
                             <div class="pk-card pk-a-coral">
                                 <div class="d-flex justify-content-between align-items-start gap-2">
                                     <div>
-                                        <p class="pk-label">Gastos de hoy</p>
-                                        <p class="pk-value"><?= $money($gastos_hoy) ?></p>
+                                        <p class="pk-label">Gastos<?= $etiquetaPeriodo ?></p>
+                                        <p class="pk-value"><?= $money($gastos_periodo) ?></p>
                                     </div>
                                     <span class="pk-icon"><i data-feather="trending-down"></i></span>
                                 </div>
@@ -301,13 +357,13 @@ button.pk-card{ cursor:pointer; font:inherit; }
                             <button type="button" class="pk-card pk-clickable pk-a-violet" data-bs-toggle="modal" data-bs-target="#modal-utilidad">
                                 <div class="d-flex justify-content-between align-items-start gap-2">
                                     <div>
-                                        <p class="pk-label">Utilidad bruta estimada</p>
-                                        <p class="pk-value"><?= $money($utilidad_hoy) ?></p>
+                                        <p class="pk-label">Utilidad bruta estimada<?= $etiquetaPeriodo ?></p>
+                                        <p class="pk-value"><?= $money($utilidad_bruta) ?></p>
                                     </div>
                                     <span class="pk-icon"><i data-feather="trending-up"></i></span>
                                 </div>
                                 <div class="pk-foot">
-                                    <span class="pk-badge <?= $utilidad_hoy < 0 ? 'is-neg' : '' ?>"><?= number_format($margen, 1) ?>% margen</span>
+                                    <span class="pk-badge <?= $utilidad_bruta < 0 ? 'is-neg' : '' ?>"><?= number_format($margen, 1) ?>% margen</span>
                                     <span class="pk-more">Ver desglose <i data-feather="chevron-right"></i></span>
                                 </div>
                             </button>
@@ -317,7 +373,7 @@ button.pk-card{ cursor:pointer; font:inherit; }
                             <button type="button" class="pk-card pk-clickable pk-a-amber" data-bs-toggle="modal" data-bs-target="#modal-creditos">
                                 <div class="d-flex justify-content-between align-items-start gap-2">
                                     <div>
-                                        <p class="pk-label">Créditos pendientes</p>
+                                        <p class="pk-label">Saldo pendiente actual</p>
                                         <p class="pk-value"><?= $money($cred_total) ?></p>
                                     </div>
                                     <span class="pk-icon"><i data-feather="file-text"></i></span>
@@ -387,13 +443,18 @@ button.pk-card{ cursor:pointer; font:inherit; }
                                         </div>
                                         <div class="pk-row">
                                             <span class="pk-sign plus">+</span>
-                                            <div class="pk-row-main"><strong>Ventas en efectivo</strong><small>Suma de tickets en efectivo</small></div>
+                                            <div class="pk-row-main"><strong>Cobrado en efectivo</strong><small>Ventas y abonos del turno</small></div>
                                             <span class="pk-row-amount"><?= $money($ventas_efectivo) ?></span>
                                         </div>
                                         <div class="pk-row">
+                                            <span class="pk-sign plus">+</span>
+                                            <div class="pk-row-main"><strong>Entradas de caja</strong><small>Movimientos del turno</small></div>
+                                            <span class="pk-row-amount"><?= $money($entradas_efectivo) ?></span>
+                                        </div>
+                                        <div class="pk-row">
                                             <span class="pk-sign minus">−</span>
-                                            <div class="pk-row-main"><strong>Gastos en efectivo</strong><small>Suma de egresos de caja</small></div>
-                                            <span class="pk-row-amount">-<?= $money($gastos_efectivo) ?></span>
+                                            <div class="pk-row-main"><strong>Salidas de caja</strong><small>Movimientos del turno</small></div>
+                                            <span class="pk-row-amount">-<?= $money($salidas_efectivo) ?></span>
                                         </div>
 
                                         <div class="pk-divider"></div>
@@ -421,44 +482,12 @@ button.pk-card{ cursor:pointer; font:inherit; }
                                         <span class="pk-icon pk-a-blue"><i data-feather="bar-chart-2"></i></span>
                                         <div>
                                             <h2>Tendencia de ventas</h2>
-                                            <small>Importe y número de tickets completados</small>
+                                            <small>Importe y número de tickets registrados</small>
                                         </div>
-                                    </div>
-                                    <div class="pk-filters d-flex flex-wrap align-items-end gap-2">
-                                        <div>
-                                            <label class="form-label small mb-1" for="panel-periodo">Periodo</label>
-                                            <select id="panel-periodo" class="form-select form-select-sm">
-                                                <option value="day">Día</option>
-                                                <option value="range">Rango de días</option>
-                                                <option value="week">Semana</option>
-                                                <option value="month">Mes</option>
-                                                <option value="year">Año</option>
-                                            </select>
-                                        </div>
-                                        <div id="filtro-dia">
-                                            <label class="form-label small mb-1" for="panel-fecha">Fecha</label>
-                                            <input id="panel-fecha" type="date" class="form-control form-control-sm" value="<?= date('Y-m-d') ?>">
-                                        </div>
-                                        <div id="filtro-rango" class="d-none">
-                                            <label class="form-label small mb-1" for="panel-inicio">Desde / hasta</label>
-                                            <div class="d-flex gap-1">
-                                                <input id="panel-inicio" type="date" class="form-control form-control-sm" value="<?= date('Y-m-01') ?>">
-                                                <input id="panel-fin" type="date" class="form-control form-control-sm" value="<?= date('Y-m-d') ?>">
-                                            </div>
-                                        </div>
-                                        <div id="filtro-mes" class="d-none">
-                                            <label class="form-label small mb-1" for="panel-mes">Mes</label>
-                                            <input id="panel-mes" type="month" class="form-control form-control-sm" value="<?= date('Y-m') ?>">
-                                        </div>
-                                        <div id="filtro-anio" class="d-none">
-                                            <label class="form-label small mb-1" for="panel-anio">Año</label>
-                                            <input id="panel-anio" type="number" min="2000" max="<?= date('Y') + 1 ?>" class="form-control form-control-sm" value="<?= date('Y') ?>">
-                                        </div>
-                                        <button id="btn-panel-aplicar" type="button" class="btn btn-sm btn-primary" title="Actualizar gráfica"><i data-feather="refresh-cw"></i></button>
                                     </div>
                                 </div>
                                 <div class="pk-section-body">
-                                    <div style="height: 340px; position: relative;"><canvas id="grafica-ventas-panel" aria-label="Gráfica de ventas" role="img"></canvas></div>
+                                    <div style="height: 340px; position: relative;"><canvas id="grafica-ventas-panel" data-consulta="<?= htmlspecialchars($consultaGrafica, ENT_QUOTES, 'UTF-8') ?>" aria-label="Gráfica de ventas" role="img"></canvas></div>
                                 </div>
                             </section>
                         </div>
