@@ -100,6 +100,74 @@ if ($tipo === 'enviar_factura_correo') {
     exit;
 }
 
+if ($tipo === 'datos_pago' || $tipo === 'emitir_pago') {
+    require_once __DIR__ . '/../models/Permiso.php';
+    require_once __DIR__ . '/../config/permisos-enum.php';
+    header('Content-Type: application/json; charset=utf-8');
+    // Mínimo VER_VENTAS. Recomendado: crear CPERMISO::EMITIR_PAGOS (como hiciste con CANCELAR_FACTURAS).
+    $permiso = (new Permiso())->verificarPermiso($_SESSION['id_rol'] ?? 0, $_SESSION['id'] ?? 0, CPERMISO::VER_VENTAS->value);
+    if (empty($_SESSION['id']) || empty($permiso['estatus'])) {
+        http_response_code(empty($_SESSION['id']) ? 401 : 403);
+        echo json_encode(['estatus' => false, 'mensaje' => 'No tienes permiso para esta acción']);
+        exit;
+    }
+    if ($tipo === 'datos_pago') {
+        echo json_encode($controller->datosPago((int)($_GET['id'] ?? 0)), JSON_UNESCAPED_UNICODE);
+    } else {
+        $input = json_decode(file_get_contents('php://input'), true) ?: [];
+        echo json_encode($controller->emitirPago((int)($input['id'] ?? 0), $input), JSON_UNESCAPED_UNICODE);
+    }
+    exit;
+}
+
+if (in_array($tipo, ['listar_pagos', 'descargar_pago', 'enviar_pago', 'cancelar_pago', 'estatus_pago'], true)) {
+    require_once __DIR__ . '/../models/Permiso.php';
+    require_once __DIR__ . '/../config/permisos-enum.php';
+    // Cancelar usa el mismo permiso que cancelar facturas; lo demás, VER_VENTAS.
+    $permisoEnum = $tipo === 'cancelar_pago' ? CPERMISO::CANCELAR_FACTURAS : CPERMISO::VER_VENTAS;
+    $permiso = (new Permiso())->verificarPermiso($_SESSION['id_rol'] ?? 0, $_SESSION['id'] ?? 0, $permisoEnum->value);
+    if (empty($_SESSION['id']) || empty($permiso['estatus'])) {
+        http_response_code(empty($_SESSION['id']) ? 401 : 403);
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode(['estatus' => false, 'mensaje' => 'No tienes permiso para esta acción']);
+        exit;
+    }
+
+    if ($tipo === 'descargar_pago') {
+        $response = $controller->descargarPago((int)($_GET['id'] ?? 0), (string)($_GET['formato'] ?? ''));
+        if (empty($response['estatus'])) {
+            http_response_code(400);
+            header('Content-Type: application/json; charset=utf-8');
+            echo json_encode($response, JSON_UNESCAPED_UNICODE);
+            exit;
+        }
+        header('Content-Type: ' . $response['content_type']);
+        header('Content-Disposition: attachment; filename="' . basename($response['filename']) . '"');
+        header('Content-Length: ' . strlen($response['contenido']));
+        header('Cache-Control: private, no-store');
+        echo $response['contenido'];
+        exit;
+    }
+
+    header('Content-Type: application/json; charset=utf-8');
+    if ($tipo === 'listar_pagos') {
+        $out = $controller->listarPagos((int)($_GET['id'] ?? 0));
+    } elseif ($tipo === 'enviar_pago') {
+        $out = $controller->enviarPago(
+            (int)($_POST['id'] ?? 0),
+            trim((string)($_POST['correo'] ?? '')),
+            trim((string)($_POST['asunto'] ?? 'Complemento de pago')),
+            trim((string)($_POST['comentarios'] ?? ''))
+        );
+    } elseif ($tipo === 'estatus_pago') {
+        $out = $controller->estatusPago((int)($_POST['id'] ?? 0));
+    } else {
+        $out = $controller->cancelarPago((int)($_POST['id'] ?? 0), trim((string)($_POST['motivo'] ?? '')));
+    }
+    echo json_encode($out, JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
 if ($tipo === 'emisores') {
     $controller->emisores();
     exit;
@@ -120,9 +188,9 @@ if ($tipo === 'catalogo_sat') {
     exit;
 }
 
-if($tipo === 'pdf'){
+if ($tipo === 'pdf') {
     $id_venta = (int)($_GET['id'] ?? 0);
-    
+
     if ($id_venta <= 0) {
         http_response_code(400);
         exit('ID de venta inválido');
@@ -130,7 +198,7 @@ if($tipo === 'pdf'){
 
     // 1. Obtener toda la información de la venta, items, abonos y datos de la ferretería
     // (Asegúrate de invocar el método detalle() de tu controlador o clase de ventas)
-    $resultado = $controller->detalle(2, $id_venta); 
+    $resultado = $controller->detalle(2, $id_venta);
 
     if (!$resultado['estatus']) {
         http_response_code(404);
@@ -172,7 +240,7 @@ if($tipo === 'pdf'){
         $pdf->SetFont('Arial', 'B', 8);
         $pdf->SetFillColor(245, 245, 245);
         $pdf->Cell(190, 5, fpdf_utf8(' HISTORIAL DE ABONOS A CRÉDITO'), 1, 1, 'L', true);
-        
+
         $pdf->SetFont('Arial', 'B', 8);
         $pdf->Cell(35, 5, fpdf_utf8('Fecha'), 1, 0, 'C', true);
         $pdf->Cell(35, 5, fpdf_utf8('Forma de pago'), 1, 0, 'C', true);
@@ -195,11 +263,11 @@ if($tipo === 'pdf'){
     exit;
 }
 
-if($tipo === 'editar_venta') {
-    
+if ($tipo === 'editar_venta') {
+
     $id_venta = $_POST['id'] ?? 0;
     $payload = $_POST ?? [];
-   
+
     header('Content-Type: application/json; charset=utf-8');
     $controller->editar(1, $id_venta, $payload);
 }
@@ -209,19 +277,19 @@ if ($tipo === 'sustituir_factura') {
     header('Content-Type: application/json; charset=utf-8');
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         http_response_code(405);
-        echo json_encode(['estatus'=>false, 'mensaje'=>'Solo POST']);
+        echo json_encode(['estatus' => false, 'mensaje' => 'Solo POST']);
         exit;
     }
     // APLICAR AQUÍ autorización de usuario (sustituir CFDI) y CSRF.
-    $data=json_decode(file_get_contents('php://input'),true);
+    $data = json_decode(file_get_contents('php://input'), true);
     if (!is_array($data)) {
         http_response_code(400);
-        echo json_encode(['estatus'=>false, 'mensaje'=>'JSON inválido']);
+        echo json_encode(['estatus' => false, 'mensaje' => 'JSON inválido']);
         exit;
     }
-    $modelo=new Venta();
-    $r=$modelo->sustituirFactura((int)($data['id']??0),$data);
-    echo json_encode($r,JSON_UNESCAPED_UNICODE);
+    $modelo = new Venta();
+    $r = $modelo->sustituirFactura((int)($data['id'] ?? 0), $data);
+    echo json_encode($r, JSON_UNESCAPED_UNICODE);
     exit;
 }
 
@@ -229,12 +297,12 @@ if ($tipo === 'revisar_sustitucion') {
     header('Content-Type: application/json; charset=utf-8');
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
         http_response_code(405);
-        echo json_encode(['estatus'=>false, 'mensaje'=>'Solo POST']);
+        echo json_encode(['estatus' => false, 'mensaje' => 'Solo POST']);
         exit;
     }
     // APLICAR AQUÍ autorización de usuario (ver/revisar CFDI) y CSRF.
-    $modelo=new Venta();
-    $r=$modelo->revisarSustitucion((int)($_POST['id']??0));
-    echo json_encode($r,JSON_UNESCAPED_UNICODE);
+    $modelo = new Venta();
+    $r = $modelo->revisarSustitucion((int)($_POST['id'] ?? 0));
+    echo json_encode($r, JSON_UNESCAPED_UNICODE);
     exit;
 }

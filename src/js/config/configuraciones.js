@@ -5,7 +5,7 @@ $(document).ready(function () {
     const d_permisos = USER_PERMISSIONS.can_view_permisos ? '' : 'd-none';
     const d_usuarios = USER_PERMISSIONS.can_view_usuarios ? '' : 'd-none';
     const d_ferreterias = USER_PERMISSIONS.can_view_ferreterias ? '' : 'd-none';
-    console.log('Permisos de usuario:', USER_PERMISSIONS);
+   // console.log('Permisos de usuario:', USER_PERMISSIONS);
 
     GeneralEventListener('mostrar-configuraciones', 'click', ventanaConfiguraciones)
 

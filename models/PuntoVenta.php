@@ -375,14 +375,31 @@ class PuntoVenta
             $cajaCobro = [];
             // 1. Obtener el costo total sumando el campo 'costo' de tus items validados
             $costo_total_venta = array_sum(array_column($itemsValidados, 'costo'));
+           $ingresoCaja = $tipo_venta === 'credito' ? $abono_inicial : $total;
+            $cajaCobro = null;
+            $id_caja = null;
+
+            if ($ingresoCaja > 0) {
+                $cajaCobro = $this->db->select(
+                    "SELECT id, total_ventas
+                    FROM cajas
+                    WHERE id_ferreteria = ? AND id_sucursal = ? AND estado = 'abierta'
+                    ORDER BY id DESC LIMIT 1 FOR UPDATE",
+                    [$this->id_ferreteria, $this->id_sucursal]
+                )[0] ?? null;
+
+                if ($cajaCobro === null) {
+                    $this->db->rollBack();
+                    return ['estatus' => false, 'mensaje' => 'Abre la caja antes de registrar el cobro'];
+                }
+
+                $id_caja = (int)$cajaCobro['id'];
+            }
             if ($tipo_venta === 'credito' && $abono_inicial > 0) {
                 // 2. Aplicar la fórmula proporcional
                 $proporcion = ($total > 0) ? ($abono_inicial / $total) : 0;
                 $utilidad_abono = $abono_inicial - ($costo_total_venta * $proporcion);
-                $cajaCobro = $this->db->select(
-                    "SELECT id, total_ventas FROM cajas WHERE id_ferreteria = ? AND id_sucursal = ? AND estado = 'abierta' ORDER BY id DESC LIMIT 1 FOR UPDATE",
-                    [$this->id_ferreteria, $this->id_sucursal]
-                );
+               
                 if (empty($cajaCobro)) {
                     $this->db->rollBack();
                     return ['estatus' => false, 'mensaje' => 'Abre la caja antes de recibir el abono inicial'];
@@ -391,6 +408,22 @@ class PuntoVenta
                 $utilidad_abono = 0.0;
             }
 
+           
+             $estatus_venta = 1; // 1 = Activa, 2 = Pendiente de pago, 3 = Abonada parcialmente
+             if ($tipo_venta === 'credito' && $abono_inicial > 0) {
+                $estatus_venta = 3; 
+             }else if($tipo_venta === 'credito' && $abono_inicial == 0){
+                $estatus_venta = 2; // Pendiente de pago
+             }else if($tipo_venta == 'credito' && $abono_inicial > $total){
+                return ['estatus' => false, 'mensaje' => 'El abono inicial no puede superar el total de la venta'];
+             }else if($tipo_venta == 'credito' && $abono_inicial == $total){
+                $estatus_venta = 1;
+             }else if($abono_inicial < 0){
+                return ['estatus' => false, 'mensaje' => 'El abono inicial no puede ser negativo'];
+             }else{
+                $estatus_venta = 1; // Contado
+             }
+           
             $utilidad_total = array_sum(array_column($itemsValidados, 'utilidad'));
             $id_venta = $this->db->insert('ventas', [
                 'id_ferreteria' => $this->id_ferreteria,
@@ -405,7 +438,7 @@ class PuntoVenta
                 'costo' => $costo_total_venta,
                 'utilidad' => $utilidad_total,
                 'tipo_venta' => $tipo_venta,
-                'estatus' => 1,
+                'estatus' => $estatus_venta,
                 'fecha_registro' => $fecha_venta
             ]);
 
@@ -424,14 +457,15 @@ class PuntoVenta
                     'monto' => $abono_inicial,
                     'utilidad' => $utilidad_abono,
                     'observaciones' => 'Abono inicial',
-                    'fecha_registro' => $fechaPago
+                    'fecha_registro' => $fechaPago,
+                    'id_caja' => $id_caja
                 ]);
                 if (!$id_abono) {
                     throw new Exception('No se pudo registrar el abono inicial');
                 }
-                $this->insertarPagos($pagos, null, (int)$id_abono, $fechaPago);
+                $this->insertarPagos($pagos, null, (int)$id_abono, $fechaPago, (int)$id_caja);
             } elseif ($tipo_venta === 'contado') {
-                $this->insertarPagos($pagos, (int)$id_venta, null, $fechaPago);
+                $this->insertarPagos($pagos, (int)$id_venta, null, $fechaPago, (int)$id_caja);
             }
 
             foreach ($itemsValidados as $it) {
@@ -495,15 +529,13 @@ class PuntoVenta
             }
 
             // La caja recibe solo dinero cobrado ahora, no el saldo financiado.
-            $cajaAbierta = !empty($cajaCobro) ? $cajaCobro : $this->db->select(
-                "SELECT id, total_ventas FROM cajas WHERE id_ferreteria = ? AND id_sucursal = ? AND estado = 'abierta' ORDER BY id DESC LIMIT 1",
-                [$this->id_ferreteria, $this->id_sucursal]
-            );
-            $ingresoCaja = $tipo_venta === 'credito' ? $abono_inicial : $total;
-            if (!empty($cajaAbierta) && $ingresoCaja > 0) {
-                $cajaId = (int)$cajaAbierta[0]['id'];
-                $nuevoTotalVentas = (float)$cajaAbierta[0]['total_ventas'] + $ingresoCaja;
-                $this->db->update('cajas', ['total_ventas' => $nuevoTotalVentas], 'id = ?', [$cajaId]);
+            if ($cajaCobro !== null) {
+                $this->db->update(
+                    'cajas',
+                    ['total_ventas' => (float)$cajaCobro['total_ventas'] + $ingresoCaja],
+                    'id = ?',
+                    [$id_caja]
+                );
             }
 
             $this->db->commit();
@@ -580,7 +612,7 @@ private function normalizarPagos(array $pagosEntrada): array
     return ['estatus' => true, 'pagos' => $pagos, 'total' => round($total, 2)];
 }
 
-private function insertarPagos(array $pagos, ?int $idVenta, ?int $idAbono, string $fecha): void
+private function insertarPagos(array $pagos, ?int $idVenta, ?int $idAbono, string $fecha, int $idCaja): void
 {
     foreach ($pagos as $p) {
         $this->db->insert('detalle_pagos', [
@@ -592,6 +624,7 @@ private function insertarPagos(array $pagos, ?int $idVenta, ?int $idAbono, strin
             'monto' => $p['monto'],
             'referencia' => $p['referencia'],
             'fecha_registro' => $fecha,
+            'id_caja' => $idCaja
         ]);
     }
 }
