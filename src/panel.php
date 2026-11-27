@@ -387,7 +387,7 @@ button.pk-card{ cursor:pointer; font:inherit; }
                                         </div>
                                         <div class="pk-row">
                                             <span class="pk-sign plus">+</span>
-                                            <div class="pk-row-main"><strong>Ventas en efectivo</strong><small>Suma de tickets en efectivo</small></div>
+                                            <div class="pk-row-main"><strong>Cobrado en efectivo</strong><small>Suma de tickets en efectivo</small></div>
                                             <span class="pk-row-amount"><?= $money($ventas_efectivo) ?></span>
                                         </div>
                                         <div class="pk-row">

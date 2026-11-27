@@ -524,6 +524,9 @@ $(document).ready(function () {
       data: null,
       title: "Estatus",
       render: (d) => {
+        if(d.folio == 'TK-5208A9-161126'){
+          console.log("Estatus de venta:", d.estatus, estadosVenta);
+        }
         const estado = estadosVenta[d.estatus] ?? {
           texto: "Desconocido",
           clase: "text-secondary",
